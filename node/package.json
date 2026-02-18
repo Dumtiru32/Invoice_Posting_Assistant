@@ -1,0 +1,17 @@
+{
+  "name": "v25.2.1-win-x64",
+  "version": "1.0.0",
+  "description": "Node.js is an open-source, cross-platform JavaScript runtime environment.",
+  "main": "index.js",
+  "dependencies": {
+    "express": "^5.2.1",
+    "npm": "^11.6.2"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
