@@ -1,0 +1,8 @@
+﻿{
+  "name": "invoice-validation-agent",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": { "start": "node app.js",
+              "start:5002": "set PORT=5001&& node app.js" },
+  "dependencies": { "express": "^4.18.2" }
+}

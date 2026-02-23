@@ -1,98 +1,70 @@
-// ai-chat.js (scoped, no global 'fab' etc.)
+// ai-chat.js — Single, clean wiring + validation call
+
 (() => {
+  // Prevent double wiring if this file gets loaded twice
+  if (window.__AP_CHAT_WIRED__) return;
+  window.__AP_CHAT_WIRED__ = true;
+
   // ====== DOM lookups ======
-  const fab       = document.getElementById("ap-ai-fab");
-  const chat      = document.getElementById("ap-ai-chat");
-  const messages  = document.getElementById("ap-ai-messages");
-  const input     = document.getElementById("ap-ai-input");
-  const sendBtn   = document.getElementById("ap-ai-send");
-  const closeBtn  = document.getElementById("ap-ai-close");
-  const minBtn    = document.getElementById("ap-ai-minimize");
-  const dragBar   = document.getElementById("ap-ai-chat-drag");
+  const fab      = document.getElementById("ap-ai-fab");
+  const chat     = document.getElementById("ap-ai-chat");
+  const messages = document.getElementById("ap-ai-messages");
+  const input    = document.getElementById("ap-ai-input");
+  const sendBtn  = document.getElementById("ap-ai-send");
+  const closeBtn = document.getElementById("ap-ai-close");
+  const minBtn   = document.getElementById("ap-ai-minimize");
+  const dragBar  = document.getElementById("ap-ai-chat-drag");
+  const btnValidate = document.getElementById("ai-btn-validate");
+  const btnRetour   = document.getElementById("ai-btn-retour"); // (kept for future use)
 
   // ====== Utilities ======
   function appendUserMsg(text) {
     const el = document.createElement("div");
     el.className = "ap-ai-msg ap-ai-msg--user";
-    el.textContent = text.trim();
+    el.textContent = (text || "").trim();
     messages.appendChild(el);
     messages.scrollTop = messages.scrollHeight;
   }
+
   function appendBotMsg(html) {
     const el = document.createElement("div");
     el.className = "ap-ai-msg ap-ai-msg--bot";
-    el.innerHTML = html;
+    el.innerHTML = html || "";
     messages.appendChild(el);
     messages.scrollTop = messages.scrollHeight;
   }
+
   function setLoading(loading) {
-    sendBtn.disabled = loading;
-    input.disabled = loading;
+    if (!sendBtn || !input) return;
+    sendBtn.disabled = !!loading;
+    input.disabled   = !!loading;
     sendBtn.textContent = loading ? "Working…" : "Send";
-  }
-
-  // ====== Build/Call AI ======
-  async function callValidate() {
-    const ctx = window.buildAiContext ? window.buildAiContext() : null;
-    if (!ctx) {
-      appendBotMsg("<strong>⚠️ I couldn't gather invoice context.</strong><br>Process a PDF first, then try again.");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const res = await fetch("/ai/validate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "validate_invoice", context: ctx })
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-
-      let html = "<h4>AI Findings</h4>";
-      if (data.summary?.status) html += `<div class="ap-ai-small"><strong>Status:</strong> ${data.summary.status}</div>`;
-      if (Array.isArray(data.discrepancies) && data.discrepancies.length) {
-        html += "<ul>";
-        for (const d of data.discrepancies) {
-          html += `<li><strong>${d.type || "Issue"}:</strong> ${d.message || ""}</li>`;
-        }
-        html += "</ul>";
-      } else {
-        html += "<div>No discrepancies reported in this test response.</div>";
-      }
-      if (data.actions?.primary) {
-        html += `<div style="margin-top:8px;"><strong>Suggested action:</strong> ${data.actions.primary}</div>`;
-        if (Array.isArray(data.actions.alternatives) && data.actions.alternatives.length) {
-          html += `<div class="ap-ai-small">Alternatives: ${data.actions.alternatives.join(" | ")}</div>`;
-        }
-      }
-      appendBotMsg(html);
-    } catch (err) {
-      appendBotMsg(`<strong>❌ Error:</strong> ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
   }
 
   // ====== Open / Close / Minimize ======
   fab?.addEventListener("click", () => {
     chat.hidden = false;
-    input.focus();
+    input?.focus();
   });
+
   closeBtn?.addEventListener("click", () => {
     chat.hidden = true;
   });
+
   let minimized = false;
   minBtn?.addEventListener("click", () => {
     minimized = !minimized;
-    chat.querySelector(".ap-ai-chat__messages").style.display = minimized ? "none" : "block";
-    chat.querySelector(".ap-ai-chat__composer").style.display = minimized ? "none" : "grid";
+    const msgEl = chat.querySelector(".ap-ai-chat__messages");
+    const compEl = chat.querySelector(".ap-ai-chat__composer");
+    if (msgEl)  msgEl.style.display = minimized ? "none" : "block";
+    if (compEl) compEl.style.display = minimized ? "none" : "grid";
   });
 
-  // ====== Draggable ======
+  // ====== Draggable header ======
   (function makeDraggable(panel, handle) {
     if (!panel || !handle) return;
-    let startX = 0, startY = 0, startLeft = 0, startTop = 0, dragging = false;
+    let startX=0, startY=0, startLeft=0, startTop=0, dragging=false;
+
     handle.addEventListener("mousedown", (e) => {
       dragging = true;
       const rect = panel.getBoundingClientRect();
@@ -102,6 +74,7 @@
       startY = e.clientY;
       document.body.style.userSelect = "none";
     });
+
     window.addEventListener("mousemove", (e) => {
       if (!dragging) return;
       const dx = e.clientX - startX;
@@ -112,68 +85,71 @@
       panel.style.bottom = "auto";
       panel.style.position = "fixed";
     });
+
     window.addEventListener("mouseup", () => {
       dragging = false;
       document.body.style.userSelect = "";
     });
-  })(document.getElementById("ap-ai-chat"), dragBar);
+  })(chat, dragBar);
 
-  // ====== Composer behavior ======
+  // ====== Message composer (optional) ======
   sendBtn?.addEventListener("click", async () => {
     const text = input.value.trim();
     if (!text) return;
     appendUserMsg(text);
-
-    if (/draft\s+email/i.test(text)) {
-      appendBotMsg("✉️ Email drafting via /ai/draft-email not wired in this demo. Type 'validate' to run validation.");
-    } else {
-      await callValidate();
-    }
-
+    // If you want to route /chat messages, you can do it here later.
     input.value = "";
     input.focus();
   });
 
-    // ======================================================
-    // NEW: ENHANCED VALIDATION BUTTON
-    // ======================================================
-    document.getElementById("ai-btn-validate")?.addEventListener("click", async () => {
-        appendUserMsg("Run enhanced validation, please.");
+  input?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendBtn?.click();
+    }
+  });
 
-        const ctx = window.buildAiContext ? window.buildAiContext() : null;
-        if (!ctx) {
-            appendBotMsg("<strong>⚠️ No invoice context available.</strong><br>Process a PDF first.");
-            return;
-        }
+  // ====== Mapper: ctx -> v1 payload ======
+  function mapCtxToV1(ctx) {
+    const inv = ctx?.invoice || {};
+    const po  = ctx?.poCandidates || [];
+    return {
+      version: "1.0",
+      source: "web-app",
+      invoice: {
+        SupplierName: ctx?.supplier?.name || null,
+        SupplierVAT: ctx?.supplier?.vat || null,
+        ReceiverVAT: ctx?.company?.vat || null,
+        SupplierType: ctx?.supplier?.type || null,
+        DetectedPONumber: po.map(p => p.poNumber).filter(Boolean),
+        InvoiceNumber: inv.invoiceNumber || null,
+        IssueDate: inv.issueDate || null,
+        DueDate: inv.dueDate || null,
+        Currency: inv.currency || null
+      },
+      lines: {
+        ItemDescription: po.map(p => p.itemDesc).filter(Boolean),
+        Amounts: []
+      },
+      context: {
+        CompanyID: ctx?.company?.id || null,
+        CompanyName: ctx?.company?.name || null,
+        CompanyOfficialVAT: ctx?.company?.vat || null,
+        POHeaders: po,
+        SupplierGLHistory: []
+      },
+      policy: {
+        noPII: true,
+        tolerances: { pricePct: null, qtyPct: null, rounding: "standard" }
+      }
+    };
+  }
 
-        setLoading(true);
-        try {
-            const res = await fetch("/ai/validate-enhanced", {
-                method: "POST",
-                headers: {"Content-Type":"application/json"},
-                body: JSON.stringify(ctx)
-            });
-            const data = await res.json();
-
-            let html = `<h4>Validation Results</h4>`;
-            html += data.summary || "";
-            html += data.discrepancies || "";
-            html += data.segmentSuggestions || "";
-
-            appendBotMsg(html);
-        } catch (err) {
-            appendBotMsg(`<strong>❌ Error:</strong> ${err.message}`);
-        }
-        setLoading(false);
-    });
-
-
-    // ======================================================
-    // NEW: RETOUR INVOICE EMAIL BUTTON
-    // ======================================================
-    
-document.getElementById("ai-btn-validate")?.addEventListener("click", async () => {
-    // Auto-open the chat if minimized/closed
+  // ======================================================
+  // VALIDATION BUTTON — single, corrected handler
+  // ======================================================
+  btnValidate?.addEventListener("click", async () => {
+    // Ensure chat is visible
     chat.hidden = false;
     input?.focus();
 
@@ -181,101 +157,108 @@ document.getElementById("ai-btn-validate")?.addEventListener("click", async () =
 
     const ctx = window.buildAiContext ? window.buildAiContext() : null;
     if (!ctx) {
-        appendBotMsg("<strong>⚠️ No invoice context available.</strong><br>Process a PDF first.");
-        return;
+      appendBotMsg("⚠️ No invoice context available.\nProcess a PDF first.");
+      return;
     }
 
     setLoading(true);
     try {
-        const res = await fetch("/ai/validate-enhanced", {
-            method: "POST",
-            headers: {"Content-Type":"application/json"},
-            body: JSON.stringify(ctx)
+      const v1 = mapCtxToV1(ctx);
+
+      const res = await fetch("http://127.0.0.1:5001/ai/validate-enhanced", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(v1)
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      let html = `
+##### Validation Results
+
+**Status:** ${data.summary?.status || "Unknown"}
+
+---
+
+### 🔍 Discrepancies
+`;
+      if (Array.isArray(data.discrepancies) && data.discrepancies.length > 0) {
+        data.discrepancies.forEach(d => {
+          html += `- **${d.code}** — ${d.message}\n`;
         });
+      } else {
+        html += "✓ No discrepancies detected.\n";
+      }
 
-        const data = await res.json();
+      html += `
 
-        let html = `<h4>Validation Results</h4>`;
-        html += data.summary || "";
-        html += data.discrepancies || "";
-        html += data.segmentSuggestions || "";
+---
 
-        appendBotMsg(html);
+### 📘 GL Account Suggestions
+`;
+      if (data.glSuggestions?.length > 0) {
+        data.glSuggestions.forEach(gl => {
+          html += `- **${gl.account}** (${gl.label}) — Confidence: ${gl.confidence}\n`;
+        });
+      } else {
+        html += "No GL suggestions available.\n";
+      }
 
+      html += `
+
+---
+
+### 📌 Next Action
+- ${data.nextActions?.primary || "None"}
+`;
+
+      appendBotMsg(html);
     } catch (err) {
-        appendBotMsg(`<strong>❌ Error:</strong> ${err.message}`);
-    }
-    setLoading(false);
-});
-
-
-// ======================================================
-// NEW: RETOUR INVOICE EMAIL BUTTON (AUTO-OPEN ENABLED)
-// ======================================================
-    document.getElementById("ai-btn-retour")?.addEventListener("click", async () => {
-        chat.hidden = false;
-        input?.focus();
-
-        appendUserMsg("Create retour invoice email, please.");
-
-        const ctx = window.buildAiContext ? window.buildAiContext() : null;
-        if (!ctx) {
-            appendBotMsg("<strong>⚠️ No invoice context available.</strong><br>Process a PDF first.");
-            return;
-        }
-
-        setLoading(true);
-        try {
-            const res = await fetch("/ai/retour-email", {
-                method: "POST",
-                headers: {"Content-Type":"application/json"},
-                body: JSON.stringify(ctx)
-            });
-
-            const data = await res.json();
-
-            let html = `
-                <h4>Retour Invoice Email (Draft)</h4>
-                <strong>Subject:</strong> ${data.subject}<br><br>
-                <textarea style="width:100%;height:180px;">${data.body}</textarea>
-                <div class="ap-ai-small">This is a draft for review. You must send it manually.</div>
-            `;
-
-            appendBotMsg(html);
-
-        } catch (err) {
-            appendBotMsg(`<strong>❌ Error:</strong> ${err.message}`);
-        }
-        setLoading(false);
-    });
-
-
-  input?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendBtn.click();
+      appendBotMsg(`❌ Error: ${err.message}`);
+    } finally {
+      setLoading(false);
     }
   });
 
-  // ====== Optional: external quick action button ======
-  // Safe to include; if button doesn't exist, nothing happens
-  //document.getElementById("btn-validate-ai")?.addEventListener("click", async () => {
-    //chat.hidden = false;
-    //appendUserMsg("Validate this invoice, please.");
-    //await callValidate();
-  //});
-
-  // Expose a tiny API if you need to open the chat from elsewhere
+  // Optional: expose tiny API
   window.APChat = {
-    open: () => { chat.hidden = false; input?.focus(); },
-    validate: async () => { chat.hidden = false; await callValidate(); }
+    open: () => { chat.hidden = false; input?.focus(); }
   };
 })();
 
-(() => {
-  // Prevent double wiring in hot-reload scenarios
-  if (window.__AP_CHAT_WIRED__) return;
-  window.__AP_CHAT_WIRED__ = true;
 
-  // ... rest of your ai-chat.js code ...
-})();
+function mapCtxToV1(ctx) {
+    const inv = ctx?.invoice || {};
+    const po  = ctx?.poCandidates || [];
+
+    return {
+        version: "1.0",
+        source: "web-app",
+        invoice: {
+            SupplierName: ctx?.supplier?.name || null,
+            SupplierVAT: ctx?.supplier?.vat || null,
+            ReceiverVAT: ctx?.company?.vat || null,
+            SupplierType: ctx?.supplier?.type || null,
+            DetectedPONumber: po.map(p => p.poNumber),
+            InvoiceNumber: inv.invoiceNumber || null,
+            IssueDate: inv.issueDate || null,
+            DueDate: inv.dueDate || null,
+            Currency: inv.currency || null
+        },
+        lines: {
+            ItemDescription: po.map(p => p.itemDesc).filter(Boolean),
+            Amounts: []
+        },
+        context: {
+            CompanyID: ctx?.company?.id || null,
+            CompanyName: ctx?.company?.name || null,
+            CompanyOfficialVAT: ctx?.company?.vat || null,
+            POHeaders: po,
+            SupplierGLHistory: []
+        },
+        policy: {
+            noPII: true,
+            tolerances: { pricePct: null, qtyPct: null, rounding: "standard" }
+        }
+    };
+}
