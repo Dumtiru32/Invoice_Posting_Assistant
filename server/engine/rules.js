@@ -1,87 +1,62 @@
-﻿import { normalize, parseDDMMYYYY } from "./utils.js";
+﻿/**
+ * rules.js - Financial Controller Validation Logic
+ */
+import { parseDDMMYYYY } from "./utils.js";
 
-export function runAllRules(p) {
-  const alerts = [];
-  const inv = p?.invoice || {};
-  const ctx = p?.context || {};
+export const validationRules = {
+    vatBE: /^BE0\d{9}$/i,
+    // Expanded placeholders to include "Folio" and Dutch "Klantnummer"
+    placeholders: /^(folio|klantnummer|id|customer|invoice|unknown|n\/a)$/i,
+    docTypes: ["invoice", "credit note"],
+};
 
-  // 1) VAT Integrity
-  if (normalize(inv.ReceiverVAT) !== normalize(ctx.CompanyOfficialVAT)) {
-    alerts.push({
-      code: "VAT_RECEIVER_NOT_OURS",
-      severity: "blocker",
-      message: "Receiver VAT on the document does not match our official VAT ID."
-    });
-  }
-  if (!inv.SupplierName || !inv.SupplierVAT) {
-    alerts.push({
-      code: "VAT_SUPPLIER_NAME_MISSING",
-      severity: "warn",
-      message: "Supplier name or VAT is missing from payload."
-    });
-  }
+export async function runAllRules(payload, config = {}) {
+    const alerts = [];
+    const inv = payload?.invoice ?? {};
+    const raise = (code, severity, message) => alerts.push({ code, severity, message });
 
-  // 2) PO requirement logic
-  const isPOtype = (inv.SupplierType || "").toUpperCase().endsWith("_PO");
-  const detectedPOs = inv.DetectedPONumber || [];
-  if (isPOtype && detectedPOs.length === 0) {
-    alerts.push({
-      code: "PO_REQUIRED_NOT_DETECTED",
-      severity: "blocker",
-      message: "PO required for this supplier but not detected."
-    });
-  }
-  for (const header of ctx.POHeaders || []) {
-    const poSupplier = (header.Supplier || "").toLowerCase().trim();
-    const invSupplier = (inv.SupplierName || "").toLowerCase().trim();
-    if (poSupplier && invSupplier && !poSupplier.includes(invSupplier)) {
-      alerts.push({
-        code: "PO_SUPPLIER_MISMATCH",
-        severity: "blocker",
-        message: `PO supplier (“${header.Supplier}”) does not match invoice supplier (“${inv.SupplierName}”).`
-      });
+    // 1. VAT Check (Our VAT)
+    if (inv.ReceiverVAT !== config.companyOfficialVAT) {
+        raise("OUR_VAT_MISMATCH", "blocker", `Expected ${config.companyOfficialVAT}, found ${inv.ReceiverVAT}`);
     }
-    const bad = ["CANCELED", "CLOSED", "REJECTED", "PENDING APPROVAL"];
-    if (bad.includes((header.POStatus || "").toUpperCase())) {
-      alerts.push({
-        code: "PO_STATUS_BLOCKING",
-        severity: "blocker",
-        message: `PO ${header.PONumber} is in a blocking status: ${header.POStatus}`
-      });
+
+    // 2. Supplier VAT (Against Registry format)
+    if (!inv.SupplierVAT || !validationRules.vatBE.test(inv.SupplierVAT)) {
+        raise("SUPPLIER_VAT_INVALID", "warning", "Supplier VAT missing or invalid BE format.");
     }
-  }
 
-  // 3) Invoice Number heuristics
-  const number = (inv.InvoiceNumber || "").toLowerCase();
-  if (/klantnummer|customer\s*id|folio|account/.test(number)) {
-    alerts.push({
-      code: "INV_NO_LOOKS_LIKE_CUSTOMER_ID",
-      severity: "warn",
-      message: "Potential Invoice Number mismatch; value resembles a Customer/Folio/Account ID."
-    });
-  }
+    // 3. Doc Type Check
+    const docType = String(inv.SupplierType || "").toLowerCase();
+    if (!validationRules.docTypes.includes(docType)) {
+        raise("INVALID_DOC_TYPE", "warning", `Document type is "${docType || 'Other'}". Expected Invoice/Credit Note.`);
+    }
 
-  // 4) Temporal checks
-  const issue = parseDDMMYYYY(inv.IssueDate);
-  const due   = parseDDMMYYYY(inv.DueDate);
-  const today = new Date();
-  if (issue && issue > today) {
-    alerts.push({ code: "DATE_IN_FUTURE", severity: "warn", message: "Issue Date is in the future." });
-  }
-  if (issue && due && due <= issue) {
-    alerts.push({ code: "DUE_BEFORE_ISSUE", severity: "warn", message: "Due Date is earlier than Issue Date." });
-  }
+    // 4. Invoice # Placeholder Check
+    if (validationRules.placeholders.test(inv.InvoiceNumber)) {
+        raise("POTENTIAL_PLACEHOLDER", "blocker", `Invoice number "${inv.InvoiceNumber}" detected as placeholder.`);
+    }
 
-  // 5) Currency check
-  const invCur = (inv.Currency || "").toUpperCase();
-  const poCur  = (ctx.POHeaders?.[0]?.Currency || "").toUpperCase();
-  if (invCur && poCur && invCur !== poCur) {
-    alerts.push({
-      code: "CURRENCY_MISMATCH",
-      severity: "warn",
-      message: `Invoice currency (${invCur}) differs from PO currency (${poCur}).`
-    });
-  }
+    // 5. Date Delta (90 Days Policy)
+    const issue = parseDDMMYYYY(inv.IssueDate);
+    const due = parseDDMMYYYY(inv.DueDate);
+    if (issue && due) {
+        const diffDays = Math.floor((due - issue) / (1000 * 60 * 60 * 24));
+        if (diffDays > 90) {
+            raise("DATE_DELTA_EXCESSIVE", "warning", `Payment terms (${diffDays} days) exceed 90-day policy.`);
+        }
+        if (diffDays < 0) {
+            raise("DATE_DELTA_NEGATIVE", "blocker", "Due date is set before Issue Date.");
+        }
+    }
 
-  return alerts;
+    // 6. Currency Check
+    if (inv.Currency && inv.Currency.toUpperCase() !== 'EUR') {
+        raise("NON_EUR_TRANSACTION", "warning", `Transaction currency is ${inv.Currency}. Manual FX adjustment required.`);
+    }
+
+    return { 
+        ok: !alerts.some(a => a.severity === "blocker"), 
+        alerts,
+        summary: alerts.length === 0 ? "Pass" : (alerts.some(a => a.severity === "blocker") ? "Fail" : "Review Required")
+    };
 }

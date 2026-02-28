@@ -148,77 +148,64 @@
   // ======================================================
   // VALIDATION BUTTON — single, corrected handler
   // ======================================================
-  btnValidate?.addEventListener("click", async () => {
-    // Ensure chat is visible
-    chat.hidden = false;
-    input?.focus();
+  const COPILOT_ENDPOINT = "https://your-copilot-service-endpoint.com/api/v1/chat"; 
+const API_KEY = "YOUR_MICROSOFT_API_KEY"; // Secure this in a production environment
 
-    appendUserMsg("Run enhanced validation, please.");
+btnValidate?.addEventListener("click", async () => {
+    chat.hidden = false;
+    appendUserMsg("Co-pilot, please validate this invoice against our GL rules.");
 
     const ctx = window.buildAiContext ? window.buildAiContext() : null;
     if (!ctx) {
-      appendBotMsg("⚠️ No invoice context available.\nProcess a PDF first.");
-      return;
+        appendBotMsg("⚠️ No invoice data found. Please upload a document first.");
+        return;
     }
 
     setLoading(true);
+
     try {
-      const v1 = mapCtxToV1(ctx);
+        // Prepare the payload for Copilot
+        const v1Payload = mapCtxToV1(ctx);
 
-      const res = await fetch("http://127.0.0.1:5001/ai/validate-enhanced", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(v1)
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+        // Fetch local JSONs to send as 'Grounding Data' so Copilot knows your GL rules
+        const [manualData, queryData] = await Promise.all([
+            fetch('Manual.json').then(res => res.json()).catch(() => []),
+            fetch('cons_GroupSupplierSegments_qry.json').then(res => res.json()).catch(() => [])
+        ]);
 
-      let html = `
-##### Validation Results
-
-**Status:** ${data.summary?.status || "Unknown"}
-
----
-
-### 🔍 Discrepancies
-`;
-      if (Array.isArray(data.discrepancies) && data.discrepancies.length > 0) {
-        data.discrepancies.forEach(d => {
-          html += `- **${d.code}** — ${d.message}\n`;
+        const response = await fetch(COPILOT_ENDPOINT, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${API_KEY}`
+            },
+            body: JSON.stringify({
+                message: "Validate this invoice data using the provided reference tables.",
+                invoiceData: v1Payload,
+                referenceTables: { manualData, queryData },
+                systemPrompt: "You are a Senior Financial Controller. Validate the 6-point checks and provide GL mappings based on the provided JSON tables."
+            })
         });
-      } else {
-        html += "✓ No discrepancies detected.\n";
-      }
 
-      html += `
+        if (!response.ok) throw new Error(`Copilot Server Error: ${response.status}`);
 
----
+        const result = await response.json();
+        
+        // Assuming Copilot returns a 'text' or 'message' field
+        renderCopilotResponse(result.message || result.text);
 
-### 📘 GL Account Suggestions
-`;
-      if (data.glSuggestions?.length > 0) {
-        data.glSuggestions.forEach(gl => {
-          html += `- **${gl.account}** (${gl.label}) — Confidence: ${gl.confidence}\n`;
-        });
-      } else {
-        html += "No GL suggestions available.\n";
-      }
-
-      html += `
-
----
-
-### 📌 Next Action
-- ${data.nextActions?.primary || "None"}
-`;
-
-      appendBotMsg(html);
     } catch (err) {
-      appendBotMsg(`❌ Error: ${err.message}`);
+        console.error(err);
+        appendBotMsg(`❌ **Connection Failed:** Could not reach MS Copilot. ${err.message}`);
     } finally {
-      setLoading(false);
+        setLoading(false);
     }
-  });
+});
+
+function renderCopilotResponse(content) {
+    // Standardizing the response format for the UI
+    appendBotMsg(content);
+}
 
   // Optional: expose tiny API
   window.APChat = {

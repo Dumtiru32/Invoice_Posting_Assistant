@@ -240,28 +240,31 @@
     }
 
     // ====== Composer behavior ======
-    sendBtn.addEventListener("click", async () => {
-      const text = input.value.trim();
-      if (!text) return;
+    
+    let lastSent = "";
 
-      appendUserMsg(text);
+    sendBtn?.addEventListener("click", () => {
+        const text = input.value.trim();
+        if (!text || text === lastSent) return; // prevents duplicates
 
-      // Simple intent routing: you can make this smarter later.
-      if (/draft\s+email/i.test(text)) {
-        appendBotMsg("✉️ Email drafting via /ai/draft-email not wired in this demo. Type 'validate' to run validation.");
-      } else {
-        await callValidate();
-      }
-
-      input.value = "";
-      input.focus();
+        lastSent = text;
+        appendUserMsg(text);
+        input.value = "";
+        input.focus();
     });
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        sendBtn.click();
-      }
-    });
+
+
+      input?.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+
+              // Do NOT trigger click() again if already sending
+              if (!sendBtn.disabled) {
+                  sendBtn.dispatchEvent(new Event("click"));
+              }
+          }
+      });
+
 
 
 
@@ -541,114 +544,65 @@
     // makeSegments() with refined exception logic
     // ------------------------------------------------------------
     function makeSegments(company, manualArray, exceptionArray, approver, supplierVAT, debug = false, supplier = null) {
-      let debugInfo = debug ? "" : "";
-      let outputSegments = [];
-      const specialSupplierTypes = ["bonus_po","services_po","provision_po","smallmaterials_po","consumables_po", "palletrent_npo", "rentequipment_po", "buildingservice_po", "carrepair_po", "maintenance_po", "rentequipment_po", "software_po", "teameevent_po", "trainingpersonnel_po"];
-      // SupplierType debug removed – now handled by main flow
-      // --- 1. Priority Check: Approver has a predefined segment ---
-      if (approver && approver.Segments?.trim()) {
-        if (debug) debugInfo += "✅ Using predefined Approver segment (overriding Manual).\n";
-        return debugInfo + approver.Segments;
-      }
+    let debugInfo = debug ? "" : "";
+    const outputSegments = [];
 
-      // --- 2. Standard case (approver && manualArray) ---
-      if (approver && manualArray) {
-        if (debug) debugInfo += `✅ All data present: Building ${manualArray.length} standard segment(s).\n`;
-
-        manualArray.forEach((manual) => {
-          const seg = [
-            company.CompanyID,
-            manual.ManualLOB,
-            manual.ManualAccount,
-            manual.ManualRL,
-            manual.ManualCenter,
-            approver.Client || "UnknownClient",
-            company.CompanyIntercompany,
-            company.CompanyProject,
-            company.CompanySpare
-          ].join(".");
-
-          const lineLabel = manual["ManualRC/NRC"] || "RC/NRC";
-          outputSegments.push(`${lineLabel} - ${seg}`);
-        });
-
-        if (debug) debugInfo += `🧮 ${manualArray.length} Segments built for posting Invoice with Customer.\n`;
-        
-          if (debug) {
-              document.getElementById("result").innerHTML += debugInfo;
-          }
-          return buildSegmentsTable(outputSegments);
-
-      }
-
-      // --- 3. Exception case (no approver but exception exists) ---
-      const supplierTypeRaw = supplier?.SupplierType || "";
-      console.log("Exception match check:", supplierVAT, Exception);
-     
-      if (supplierTypeRaw.substring(supplierTypeRaw.length - 3) == "NPO" && !approver) {
-
-        const exception = exceptionArray.filter(
-          e => supplierVAT && normalizeVAT(e.ExceptionBTW) === normalizeVAT(supplierVAT)
-        );
-
-        if (exception.length > 0) {
-          debugInfo += `⚙ Exception applied → ${exception
-            .map((e) => `${e.SegmentException} (VAT: ${e.ExceptionBTW})`)
-            .join(" | ")}\n`;
-        } else {
-          debugInfo += `❌ No approver detected and no exception found.\n`;
-        }
-
-        return debugInfo.trim(); // ✅ return ONLY after exception check
-      }
-
-
-      // --- 4.Consumables logic ---
-      const supplierTypes = getSupplierTypes(supplier);
-      if (
-        supplier &&
-        supplier.SupplierType &&
-        supplierTypes.some(t => specialSupplierTypes.includes(t)) &&
-        manualArray && !approver
-      ) {
-        if (debug) debugInfo += `🧾 Consumables invoice detected — building default segment(s) without approver.\n`;
-
-        manualArray.forEach((manual) => {
-          const seg = [
-            company.CompanyID,
-            manual.ManualLOB,
-            manual.ManualAccount,
-            manual.ManualRL,
-            manual.ManualCenter,
-            manual.ManualClient ? manual.ManualClient : "CLIENT", // Fallback value
-            company.CompanyIntercompany,
-            manual.ManualLocatiion ? manual.ManualLocatiion : company.CompanyLocation,
-            manual.ManualProject ? manual.ManualProject : company.CompanyProject,
-           
-            company.CompanySpare
-          ].join(".");
-
-          const lineLabel = manual["ManualRC/NRC"] || "RC/NRC";
-          outputSegments.push(`${lineLabel} - ${seg}`);
-        });
-
-        if (debug) debugInfo += `🧮 ${manualArray.length} Posting segments built (No customer found on the invoice).\n`;
-        return debugInfo + buildSegmentsTable(outputSegments);
-      }
-
-      // --- 5. Missing data fallback ---
-      const missing = [];
-      if (!company) missing.push("Company");
-      if (!manualArray) missing.push("Manual (e.g., LOB, Account)");
-      if (!approver) missing.push("Approver/Client");
-
-      if (missing.length && !exceptionArray) {
-        if (debug) debugInfo += `⚠️ Incomplete data for segment: Missing ${missing.join(", ")}.\n`;
-        return debugInfo + `⚠️ Segmentation failed. Missing data: ${missing.join(", ")}.`;
-      }
-
-      return debugInfo + `⚠️ Segmentation logic could not be determined. Check intermediate results.`;
+    // Preserve approver info as)
+    if (approver?.Segments?.trim()) {
+      if (debug) debugInfo += "📦 Predefined approver posting segment(s) detected; showing Manual table for override.\n";
+      // Show them as info above the table instead of gating rendering
+      debugInfo += `<div class="ap-hint">Predefined segments: <code>${approver.Segments}</code></div>`;
     }
+
+    // Exception notes (do not return early)
+    const supplierTypeRaw = supplier?.SupplierType ?? "";
+    if (supplierTypeRaw.endsWith("NPO") && !approver) {
+      const applied = (exceptionArray || []).filter(
+        e => supplierVAT && normalizeVAT(e.ExceptionBTW) === normalizeVAT(supplierVAT)
+      );
+      if (applied.length > 0) {
+        debugInfo += `⚙ Exception applied → ${applied
+          .map(e => `${e.SegmentException} (VAT: ${e.ExceptionBTW})`)
+          .join("<br>")}\n`;
+      } else {
+        debugInfo += `⚠️ No approver detected and no exception found.\n`;
+      }
+    }
+
+    // Build manual table for ALL supplier types whenever manual rules exist
+    const clientValue = (approver?.Client && approver.Client.trim()) ? approver.Client : "No Approver Assigned";
+    if (Array.isArray(manualArray) && manualArray.length) {
+      manualArray.forEach(manual => {
+        const seg = [
+          company?.CompanyID            ?? "CO",
+          manual?.ManualLOB             ?? "LOB",
+          manual?.ManualAccount         ?? "ACC",
+          manual?.ManualRL              ?? "RL",
+          manual?.ManualCenter          ?? "CTR",
+          clientValue,
+          company?.CompanyIntercompany  ?? "IC",
+          manual?.ManualLocatiion       ?? company?.CompanyLocation ?? "LOC",
+          manual?.ManualProject         ?? company?.CompanyProject  ?? "PRJ",
+          company?.CompanySpare         ?? "SPARE"
+        ].join(".");
+
+        const lineLabel = manual?.["ManualRC/NRC"] ?? "RC/NRC";
+        outputSegments.push(`${lineLabel} - ${seg}`);
+      });
+
+      // Subtle UI + console note when approver missing
+      if (!approver) {
+        console.info("Approver data missing; displaying manual override table.");
+        debugInfo += `<div class="ap-hint" style="margin:6px 0;color:#555;">Approver data missing; displaying manual override table.</div>`;
+      }
+      return debugInfo + buildSegmentsTable(outputSegments);
+    }
+
+    // If we have no manual rules, inform clearly but don't crash
+    if (debug) debugInfo += `⚠️ No Manual mapping found for ${company?.CompanyID ?? "?"}/${supplier?.SupplierType ?? "?"}.\n`;
+    return debugInfo + `<p>⚠️ No manual rules available for this supplier/company.</p>`;
+  }
+
 
     // Build Segments Table
       function buildSegmentsTable(segments) {
@@ -1686,9 +1640,12 @@ const DDMMYYYY = String.raw`
         
         // Table goes into #manualSugest
         const manualDiv = document.getElementById("manualSugest");
-        if (seg && seg.includes("<table")) {
-            manualDiv.innerHTML = seg;
-        }
+          try {
+            manualDiv.innerHTML = seg || `<p>⚠️ Manual table returned no content.</p>`;
+          } catch (err) {
+            console.error("Manual table rendering failed:", err);
+            manualDiv.innerHTML = `<p>❌ Manual table rendering failed: ${err.message}</p>`;
+          }
 
 
         // STEP 5 — VAT Extraction and Classification Table
