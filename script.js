@@ -445,6 +445,28 @@
       return str
         .replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, "-"); 
     }
+    // Removes non‑breaking spaces and normalizes spacing
+    function normalizeSpaces(str) {
+      return String(str || "")
+        .replace(/\u00A0/g, " ") // NBSP → normal space
+        .replace(/\s+/g, " ")    // collapse whitespace
+        .trim();
+    }
+
+    
+    //Normalizes a PO core into safe canonical format (no PO prefix inside)
+    function normalizePONumber(s) {
+      if (!s) return "";
+
+      return String(s)
+        .toUpperCase()
+        .replace(/\u00A0/g, " ")        // NBSP -> normal space
+        .replace(/[\u2010-\u2015\u2212]/g, "-") // Unicode dashes -> "-"
+        .replace(/[^A-Z0-9-]/g, "")     // remove non‑alphanumeric
+        .replace(/-+/g, "-")            // collapse multiple dashes
+        .replace(/^-|-$/g, "");         // trim leading/trailing dash
+    }
+
 
 
     async function extractTextFromPDF(file) {
@@ -572,23 +594,71 @@
     // Build manual table for ALL supplier types whenever manual rules exist
     const clientValue = (approver?.Client && approver.Client.trim()) ? approver.Client : "No Approver Assigned";
     if (Array.isArray(manualArray) && manualArray.length) {
-      manualArray.forEach(manual => {
+      
+
+      manualArray.forEach((manual) => {
+        // 1) Priority: Manual value if present & non-empty
+        // 2) Else: take Company.json default if the field exists in Company
+        // 3) Else: safe literal fallback
+
+        const LOB = (manual?.ManualLOB && manual.ManualLOB.trim() !== "")
+          ? manual.ManualLOB
+          : (company?.CompanyLineOfBusiness ?? "LOB"); // <-- real key from Company.json
+
+        const ACCOUNT = (manual?.ManualAccount && manual.ManualAccount.trim() !== "")
+          ? manual.ManualAccount
+          : "ACC"; // Company.json has no CompanyAccount → safe fallback
+
+        const RL = (manual?.ManualRL && manual.ManualRL.trim() !== "")
+          ? manual.ManualRL
+          : "RL"; // Company.json has no CompanyRL → safe fallback
+
+        const CENTER = (manual?.ManualCenter && manual.ManualCenter.trim() !== "")
+          ? manual.ManualCenter
+          : "CTR"; // Company.json has no CompanyCenter → safe fallback
+
+        const CLIENT = (approver?.Client && approver.Client.trim() !== "")
+          ? approver.Client
+          : ((manual?.ManualClient && manual.ManualClient.trim() !== "")
+              ? manual.ManualClient
+              : "No Approver Assigned");
+
+        const INTERCOMPANY = (company?.CompanyIntercompany && String(company.CompanyIntercompany).trim() !== "")
+          ? company.CompanyIntercompany
+          : "IC";
+
+        // NOTE: typo in some data: ManualLocatiion (double 'i'); keep both to be safe
+        const LOCATION = (manual?.ManualLocatiion && manual.ManualLocatiion.trim() !== "")
+          ? manual.ManualLocatiion
+          : ((manual?.ManualLocation && manual.ManualLocation.trim() !== "")
+              ? manual.ManualLocation
+              : (company?.CompanyLocation ?? "LOC"));
+
+        const PROJECT = (manual?.ManualProject && manual.ManualProject.trim() !== "")
+          ? manual.ManualProject
+          : (company?.CompanyProject ?? "PRJ");
+
+        const SPARE = (company?.CompanySpare && String(company.CompanySpare).trim() !== "")
+          ? company.CompanySpare
+          : "SPARE";
+
         const seg = [
-          company?.CompanyID            ?? "CO",
-          manual?.ManualLOB             ?? "LOB",
-          manual?.ManualAccount         ?? "ACC",
-          manual?.ManualRL              ?? "RL",
-          manual?.ManualCenter          ?? "CTR",
-          clientValue,
-          company?.CompanyIntercompany  ?? "IC",
-          manual?.ManualLocatiion       ?? company?.CompanyLocation ?? "LOC",
-          manual?.ManualProject         ?? company?.CompanyProject  ?? "PRJ",
-          company?.CompanySpare         ?? "SPARE"
+          company?.CompanyID ?? "CO",
+          LOB,
+          ACCOUNT,
+          RL,
+          CENTER,
+          CLIENT,
+          INTERCOMPANY,
+          LOCATION,   // keep location before project to match the latest usage pattern
+          PROJECT,
+          SPARE
         ].join(".");
 
         const lineLabel = manual?.["ManualRC/NRC"] ?? "RC/NRC";
         outputSegments.push(`${lineLabel} - ${seg}`);
       });
+
 
       // Subtle UI + console note when approver missing
       if (!approver) {
@@ -901,56 +971,72 @@
     // Detect Purchase Order Number
     // ------------------------------
     function detectPoNumbers(text, company) {
-      if (!text) return null;
-      const found = [];
-      
-      // 1) If a company is known, search for company-specific PO patterns first:
-      //    Examples: PO-CLA-00108895, PO CLA 00108895, PO_CLA_00108895 (case-insensitive)
-      if (company && company.CompanyID) {
-        
-        const compId = company.CompanyID.replace(/[^A-Z0-9]/gi, "").toUpperCase();
-        const rxComp = new RegExp(`PO[-_\\s:]?${compId}[-_\\s:]?(\\d{3,})`, "gi");
+        if (!text) return null;
+
+        // Normalize hyphens & NBSP
+        const norm = normalizeSpaces(normalizeHyphens(text));
+
+        // Build company ID clean variant
+        const compId = company?.CompanyID
+          ? company.CompanyID.replace(/[^A-Z0-9]/gi, "").toUpperCase()
+          : null;
+
+        const found = new Set();
+
+        // 1) LABEL-BASED extraction (Purchase Order:, Order No:, PO:, etc.)
+        const RX_LABEL_AFTER =
+          /(?:buyer\s*reference\s*[:\-]?\s*)?(?:purchase\s*order|p\.?\s*o\.?|order\s*(?:no\.?|number|#))\s*[:\-]?\s*([A-Z]{2,})?[\u2010-\u2015\u2212\-_ \t]*([0-9]{3,})/gi;
+
         let m;
-        while ((m = rxComp.exec(normalizeHyphens(text))) !== null) {
-          // m[1] is the numeric part
-          found.push(`PO-${compId}-${m[1]}`);
+        while ((m = RX_LABEL_AFTER.exec(norm)) !== null) {
+          const comp = m[1] ? m[1].toUpperCase() : compId;
+          const num = m[2];
+          const core = comp ? `${comp}-${num}` : num;
+          found.add(core);
         }
-      }
 
-      // 2) Generic PO patterns (catch PO-12345, PO 12345, PO:12345, PO-CLA-12345 etc.)
-      //    This catches formats where the company part may or may not be present.
-      //    Groups:
-      //      g1 = optional company-like chunk (letters/digits)
-      //      g2 = numeric sequence (at least 3 digits)
-      const rxGeneric = /PO[-_\s:]?([A-Z0-9]{2,})?[-_\s:]?(\d{3,})/gi;
-      let g;
-      while ((g = rxGeneric.exec(text)) !== null) {
-        const maybeComp = g[1] ? g[1].replace(/[-_\s:]/g, "").toUpperCase() : null;
-        const num = g[2];
-        // If we already captured this as company-specific, skip duplicate
-        if (company && maybeComp && maybeComp === company.CompanyID.toUpperCase()) {
-          // already captured in the company-specific pass
-          continue;
+        // 2) COMPANY-ID + digits (e.g., "CLA-00112731" with no PO prefix)
+        if (compId) {
+          const RX_COMP_ONLY = new RegExp(
+            `\\b${compId}[\\u2010-\\u2015\\u2212\\-_ \\t]*([0-9]{3,})\\b`,
+            "gi"
+          );
+          let c;
+          while ((c = RX_COMP_ONLY.exec(norm)) !== null) {
+            const num = c[1];
+            found.add(`${compId}-${num}`);
+          }
         }
-        if (maybeComp) found.push(`PO-${maybeComp}-${num}`);
-        else found.push(`PO-${num}`);
+
+        // 3) PO‑prefix legacy formats (P.O., PO-, etc.)
+        const RX_PO_PREFIX =
+          /p\.?\s*o\.?[\u2010-\u2015\u2212\-_:\s]*([A-Z0-9]{2,})?[\u2010-\u2015\u2212\-_:\s]*([0-9]{3,})/gi;
+
+        let p;
+        while ((p = RX_PO_PREFIX.exec(norm)) !== null) {
+          const comp = p[1] ? p[1].toUpperCase() : compId;
+          const num = p[2];
+          found.add(comp ? `${comp}-${num}` : num);
+        }
+
+        // ---- PO PREFIX CORRECTION LAYER ----
+        const normalized = new Set();
+        for (const item of found) {
+          const canonicalCore = normalizePONumber(item); // e.g., "CLA-00112731"
+
+          // If already starts with PO-, keep as-is
+          if (/^PO-/i.test(item)) {
+            normalized.add(item.toUpperCase());
+            continue;
+          }
+
+          // Otherwise, enforce PO prefix
+          const corrected = `PO-${canonicalCore}`;
+          normalized.add(corrected);
+        }
+
+        return normalized.size ? Array.from(normalized) : null;
       }
-
-      // 3) Also try to capture tokens like "PO-CLA-00108938/OTHER" where number might be followed by other chars
-      //    (less common): look for PO-<anything>-digits sequences and extract digits at end
-      const rxLoose = /PO[-_\s:]?[A-Z0-9\-_.]*?(\d{3,})/gi;
-      let l;
-      while ((l = rxLoose.exec(text)) !== null) {
-        const candidate = `PO-${l[1]}`;
-        // avoid duplicates
-        if (!found.includes(candidate)) found.push(candidate);
-      }
-
-      // Normalize results and remove duplicates / empty entries
-      const normalized = [...new Set(found.filter(Boolean))];
-
-      return normalized.length ? normalized : null;
-    }
 
       
       // Expanded Detection & Template Mapping
@@ -1275,7 +1361,7 @@ const DDMMYYYY = String.raw`
         const text = await extractTextFromPDF(file);
         console.log("🔍 FULL PDF TEXT:\n", text);
         if (!text) throw new Error("No readable text found in PDF.");
-
+        
         let output = "";
 
        // STEP 1 — Enhanced Supplier VAT validation
