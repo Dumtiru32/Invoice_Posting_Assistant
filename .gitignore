@@ -12,6 +12,8 @@ config.php
 ############################################
 json/
 *.local.json
+images/
+Images/
 
 ############################################
 # NODE / JAVASCRIPT ENV

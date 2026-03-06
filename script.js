@@ -617,11 +617,38 @@
           ? manual.ManualCenter
           : "CTR"; // Company.json has no CompanyCenter → safe fallback
 
-        const CLIENT = (approver?.Client && approver.Client.trim() !== "")
-          ? approver.Client
-          : ((manual?.ManualClient && manual.ManualClient.trim() !== "")
-              ? manual.ManualClient
-              : "No Approver Assigned");
+        // --- NEW CUSTOMER FALLBACK LOGIC ---
+        // 1) Collect all customers from the matched PO rows
+        let poCustomers = [];
+
+        // poNumbers & PoData are already available in processBtn() scope,
+        // but makeSegments() receives no PoData by default.
+        // So we pull it from window.__lastPoRows (already created in processBtn)
+        
+        // --- BUILD UNIQUE PO CUSTOMER LIST (IF ANY) ---
+        let uniquePOCustomers = [];
+
+        if (Array.isArray(window.__poCustomers)) {
+            uniquePOCustomers = [...new Set(
+                window.__poCustomers
+                    .filter(v => v && v.trim() !== "")
+                    .map(v => v.trim())
+            )];
+        }
+
+        // Manual client value
+        const manualClientValue =
+            manual?.ManualClient && manual.ManualClient.trim() !== ""
+                ? manual.ManualClient.trim()
+                : null;
+
+        // FINAL PRIORITY LOGIC
+        const clientValue =
+            (approver?.Client && approver.Client.trim() !== "") ? approver.Client.trim() :
+            manualClientValue ? manualClientValue :
+            (uniquePOCustomers.length > 0 ? uniquePOCustomers.join("; ") : "No Approver Assigned");
+
+        
 
         const INTERCOMPANY = (company?.CompanyIntercompany && String(company.CompanyIntercompany).trim() !== "")
           ? company.CompanyIntercompany
@@ -648,7 +675,7 @@
           ACCOUNT,
           RL,
           CENTER,
-          CLIENT,
+          clientValue,
           INTERCOMPANY,
           LOCATION,   // keep location before project to match the latest usage pattern
           PROJECT,
@@ -1345,6 +1372,10 @@ const DDMMYYYY = String.raw`
       document.getElementById("lines").innerHTML = "";
       document.getElementById("otherResult").innerHTML = "";
       document.getElementById("base64Input").value = "";
+      window.__poCustomers = [];       // reset collected PO customers
+      window.__lastPoRows = [];        // reset cached PO rows
+      window.__lastApprover = null;    // reset approver from previous invoice
+      window.__lastInvoice = null;     // reset invoice object
 
       
       const aiMsgs = document.getElementById("ap-ai-messages");
@@ -1563,6 +1594,17 @@ const DDMMYYYY = String.raw`
                                 : "";
 
                             // ───────────────────────────────────────────────
+                            
+                            // --- NEW: COLLECT PO CUSTOMERS FOR CLIENT FALLBACK LOGIC ---
+                            if (!window.__poCustomers) window.__poCustomers = [];
+
+                            const poCustomerValue = match["Customer"] ?? match.Customer ?? null;
+                            if (poCustomerValue && poCustomerValue !== "null" && poCustomerValue.trim() !== "") {
+                                window.__poCustomers.push(poCustomerValue.trim());
+                            }
+
+                            
+                            
                             // ROW RENDERING
                             // ───────────────────────────────────────────────
                             tableHTML += `
