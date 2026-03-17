@@ -117,6 +117,8 @@
 
     document.getElementById("emtyButton")
     .addEventListener("click", emptyTextarea);
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
     
     //======= CHATBOT ========
     // ====== DOM elements ======
@@ -421,10 +423,159 @@
             // remove everything NOT Base64
             .replace(/[^A-Za-z0-9+/=]/g, "");
         }
+        
+        async function sendToOCR(base64) {
+          const res = await fetch("http://localhost:5500/api/process-invoice", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ base64 })
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        }
+
+// 1. SET WORKER PATH IMMEDIATELY
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+document.getElementById("btnOcr").addEventListener("click", async () => {
+  const btn = document.getElementById("btnOcr");
+  const textarea = document.getElementById("base64Input");
+
+  if (!textarea.value.trim()) {
+    alert("Paste a Base64 PDF first.");
+    return;
+  }
+
+  try {
+    // Prevent double-click OCR jobs
+    btn.disabled = true;
+    btn.innerText = "Running OCR...";
+
+    // Clean Base64 payload
+    const cleaned = textarea.value
+      .replace(/^data:.*;base64,/, "")
+      .replace(/\s+/g, "");
+
+    console.log("Sending Base64 length:", cleaned.length);
+
+    const result = await sendToOCR(cleaned);
+
+    if (result.error) {
+      throw new Error(result.error);
+    }
+
+    // Download searchable PDF returned by server
+    if (result.pdfBase64) {
+      const link = document.createElement("a");
+      link.href = "data:application/pdf;base64," + result.pdfBase64;
+      link.download = "searchable_invoice.pdf";
+      link.click();
+    }
+
+    if (result.textPreview) {
+      document.getElementById("ocrPreview").textContent = result.textPreview;
+    }
+
+  } catch (err) {
+    console.error("OCR failed:", err);
+    alert("OCR failed: " + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerText = "Run OCR (server)";
+  }
+});
+
+// Helper to ensure we get a valid Uint8Array
+function getUint8ArrayFromBase64(base64) {
+    const raw = base64.replace(/^data:application\/pdf;base64,/, "").trim();
+    try {
+        const binary = atob(raw);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return bytes;
+    } catch (e) {
+        throw new Error("INVALID_BASE64_FORMAT");
+    }
+}
+        
+        // =========================
+        // RUN OCR (SERVER-SIDE)
+        // =========================
+
+        /**
+         * Main Architectural Entry Point
+         * Differentiates between text-based and image-based PDFs.
+         */
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+async function convertAndProcessBase64(base64String) {
+    try {
+        // 1. Clean and Convert Base64 to Uint8Array
+        const cleanedBase64 = base64String.replace(/^data:application\/pdf;base64,/, "").trim();
+        const binaryString = atob(cleanedBase64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        // 2. Pre-flight Check (Text Density)
+        const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+        let extractedText = "";
+        const pagesToAnalyze = Math.min(pdf.numPages, 2);
+
+        for (let i = 1; i <= pagesToAnalyze; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            extractedText += content.items.map(it => it.str).join(" ");
+        }
+
+        const isRaster = extractedText.trim().length < 10;
+        const originalUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+
+        // 3. Dual-Stream Logic
+        if (!isRaster) {
+            return { status: "TEXT_BASED", originalFile: originalUrl, confidence: 100 };
+        }
+
+        // Triggering the OCR Rendering Stream
+        const ocrResult = await performOCR(pdf); // Pass the loaded PDF object directly
+
+        return {
+            status: "RASTER_BASED",
+            originalFile: originalUrl,
+            processedTextFile: ocrResult.textBlobUrl,
+            metadata: { confidence: ocrResult.confidence }
+        };
+
+    } catch (err) {
+        console.error("Architectural Error:", err);
+        return { error: err.message };
+    }
+}
+
+      /**
+       * Helper: Converts a PDF Page object into an Image Blob via Canvas
+       */
+      async function renderPageToImage(page) {
+          const viewport = page.getViewport({ scale: 2.0 }); // Scale 2.0 improves OCR accuracy
+          const canvas = document.createElement('canvas');
+          const context = canvas.getContext('2d');
+          
+          canvas.height = viewport.height;
+          canvas.width = viewport.width;
+
+          await page.render({
+              canvasContext: context,
+              viewport: viewport
+          }).promise;
+
+          return new Promise((resolve) => {
+              canvas.toBlob((blob) => resolve(blob), 'image/png');
+          });
+      }
 
 
-
-
+        
       function getSupplierTypes(supplier) {
       if (!supplier || !supplier.SupplierType) return [];
       return supplier.SupplierType
@@ -756,7 +907,7 @@
   const normalized = text.toLowerCase();
 
   const invoiceKeywords = ["invoice", "factuur", "fattura", "factura", "rechnung", "facture"];
-  const creditKeywords = ["creditnota", "krediet nota", "kredietnota", "credit nota"];
+  const creditKeywords = ["creditnota", "krediet nota", "kredietnota", "credit nota", "CREDIT MEMO", "credit memo"];
 
   if (creditKeywords.some(k => normalized.includes(k))) return "Credit Note";
   if (invoiceKeywords.some(k => normalized.includes(k))) return "Invoice";
@@ -782,7 +933,7 @@
     function detectInvoiceNumberPeppol(text, supplier) {
     if (!supplier || !supplier["InvoiceN_label"]) return null;
     
-    const label1 = "INVOICE Number: ";
+    const label1 = detectDocumentType(text) == "Invoice" ? "INVOICE Number: " : "CREDIT MEMO Number: ";
     const label = "Document Currency Code:";
     const patternRight1 = new RegExp(`${label1}\\s*[:\\-]?\\s*([A-Za-z0-9\\-/]+)`, "i");
     const patternRight = new RegExp(`${label}\\s*[:\\-]?\\s*([A-Za-z0-9\\-/]+)`, "i");
@@ -995,75 +1146,135 @@
       html += `</table>`;
       linesDiv.innerHTML = html;
     }
-    // Detect Purchase Order Number
-    // ------------------------------
+    // Detect Purchase Order Number (robust to whitespace-split digits)
+    // ---------------------------------------------------------------
     function detectPoNumbers(text, company) {
-        if (!text) return null;
+      if (!text) return null;
 
-        // Normalize hyphens & NBSP
-        const norm = normalizeSpaces(normalizeHyphens(text));
+      // 1) Normalize common PDF/Unicode quirks
+      const norm = normalizeSpaces(normalizeHyphens(text)); // you already have these helpers
+      const compId = company?.CompanyID
+        ? company.CompanyID.replace(/[^A-Z0-9]/gi, "").toUpperCase()
+        : null;
 
-        // Build company ID clean variant
-        const compId = company?.CompanyID
-          ? company.CompanyID.replace(/[^A-Z0-9]/gi, "").toUpperCase()
-          : null;
-
-        const found = new Set();
-
-        // 1) LABEL-BASED extraction (Purchase Order:, Order No:, PO:, etc.)
-        const RX_LABEL_AFTER =
-          /(?:buyer\s*reference\s*[:\-]?\s*)?(?:purchase\s*order|p\.?\s*o\.?|order\s*(?:no\.?|number|#))\s*[:\-]?\s*([A-Z]{2,})?[\u2010-\u2015\u2212\-_ \t]*([0-9]{3,})/gi;
-
-        let m;
-        while ((m = RX_LABEL_AFTER.exec(norm)) !== null) {
-          const comp = m[1] ? m[1].toUpperCase() : compId;
-          const num = m[2];
-          const core = comp ? `${comp}-${num}` : num;
-          found.add(core);
-        }
-
-        // 2) COMPANY-ID + digits (e.g., "CLA-00112731" with no PO prefix)
-        if (compId) {
-          const RX_COMP_ONLY = new RegExp(
-            `\\b${compId}[\\u2010-\\u2015\\u2212\\-_ \\t]*([0-9]{3,})\\b`,
-            "gi"
-          );
-          let c;
-          while ((c = RX_COMP_ONLY.exec(norm)) !== null) {
-            const num = c[1];
-            found.add(`${compId}-${num}`);
-          }
-        }
-
-        // 3) PO‑prefix legacy formats (P.O., PO-, etc.)
-        const RX_PO_PREFIX =
-          /p\.?\s*o\.?[\u2010-\u2015\u2212\-_:\s]*([A-Z0-9]{2,})?[\u2010-\u2015\u2212\-_:\s]*([0-9]{3,})/gi;
-
-        let p;
-        while ((p = RX_PO_PREFIX.exec(norm)) !== null) {
-          const comp = p[1] ? p[1].toUpperCase() : compId;
-          const num = p[2];
-          found.add(comp ? `${comp}-${num}` : num);
-        }
-
-        // ---- PO PREFIX CORRECTION LAYER ----
-        const normalized = new Set();
-        for (const item of found) {
-          const canonicalCore = normalizePONumber(item); // e.g., "CLA-00112731"
-
-          // If already starts with PO-, keep as-is
-          if (/^PO-/i.test(item)) {
-            normalized.add(item.toUpperCase());
-            continue;
-          }
-
-          // Otherwise, enforce PO prefix
-          const corrected = `PO-${canonicalCore}`;
-          normalized.add(corrected);
-        }
-
-        return normalized.size ? Array.from(normalized) : null;
+      // A helper to finalize a captured PO into canonical "PO-XXX-<digits>" form
+      function finalizePO(prefix, comp, digits) {
+        const cleanDigits = String(digits).replace(/\s+/g, ""); // <-- strip spaces in the numeric tail
+        const core = comp ? `${comp}-${cleanDigits}` : cleanDigits;
+        // keep original "PO-" if present, else add it
+        const po = prefix?.toUpperCase().startsWith("PO") ? `${prefix.toUpperCase()}-${core}` : `PO-${core}`;
+        return po.toUpperCase();
       }
+
+      const found = new Set();
+
+      // ---------------------------
+      // 2) LABEL-BASED extraction
+      //    e.g., "Purchase Order: PO-CLA-001 13157"
+      // ---------------------------
+      // Groups:
+      //  1: optional "PO" (with dots/spaces allowed)
+      //  2: company block (letters/numbers, at least 2)
+      //  3: a 3+ digit start
+      //  4: tail digits possibly separated by spaces/dashes (at least 1 digit somewhere)
+      const RX_LABEL_AFTER = new RegExp(
+        String.raw`(?:buyer\s*reference\s*[:\-]?\s*)?` +
+        String.raw`(?:purchase\s*order|p\.?\s*o\.?\s*order|po|p\.?\s*o\.?)\s*[:\-]?\s*` +
+        // optional explicit PO prefix before company
+        String.raw`(?:(p\.?\s*o\.?)\s*[-:\s]*)?` +
+        // company chunk
+        String.raw`([A-Z0-9]{2,})\s*[-_–—‑]?\s*` +      // accepts various dashes
+        // first digits
+        String.raw`([0-9]{3,})` +
+        // optional split tail, e.g. " 13157" or "- 13157"
+        String.raw`(?:[ \t\u00A0\-_–—‑]*([0-9][0-9 \t\u00A0\-_–—‑]{0,20}))?`,
+        "gi"
+      );
+
+      let m;
+      while ((m = RX_LABEL_AFTER.exec(norm)) !== null) {
+        const poPrefix = m[1] || "PO";
+        const comp = m[2]?.toUpperCase();
+        const firstDigits = m[3] || "";
+        const tailDigits = (m[4] || "").replace(/[^\d\s]/g, "");
+        const digits = tailDigits ? `${firstDigits}${tailDigits}` : firstDigits;
+        found.add(finalizePO(poPrefix, comp, digits));
+      }
+
+      // ------------------------------------------
+      // 3) COMPANY-ID + digits (no "PO" in PDF)
+      //     e.g., "CLA-001 13157", or "CLA 001-13157"
+      // ------------------------------------------
+      if (compId) {
+        const RX_COMP_ONLY = new RegExp(
+          String.raw`\b${compId}[ \t\u00A0\-_–—‑]*` +      // company
+          String.raw`([0-9]{3,})` +                       // first digits
+          String.raw`(?:[ \t\u00A0\-_–—‑]*([0-9][0-9 \t\u00A0\-_–—‑]{0,20}))?` + // optional tail
+          String.raw`\b`,
+          "gi"
+        );
+        let c;
+        while ((c = RX_COMP_ONLY.exec(norm)) !== null) {
+          const first = c[1] || "";
+          const tail = (c[2] || "").replace(/[^\d\s]/g, "");
+          const digits = tail ? `${first}${tail}` : first;
+          found.add(finalizePO("PO", compId, digits));
+        }
+      }
+
+      // ------------------------------------------
+      // 4) PO‑prefix legacy formats (tolerant)
+      //    e.g., "P.O. - CLA - 001 13157"
+      // ------------------------------------------
+      const RX_PO_PREFIX = new RegExp(
+        String.raw`(p\.?\s*o\.?)\s*[-:\s]*` +            // 1: "PO" with dots/spaces
+        String.raw`([A-Z0-9]{2,})\s*[-_–—‑]?\s*` +       // 2: company
+        String.raw`([0-9]{3,})` +                        // 3: first digits
+        String.raw`(?:[ \t\u00A0\-_–—‑]*([0-9][0-9 \t\u00A0\-_–—‑]{0,20}))?`, // 4: tail
+        "gi"
+      );
+      let p;
+      while ((p = RX_PO_PREFIX.exec(norm)) !== null) {
+        const poPrefix = p[1] || "PO";
+        const comp = p[2]?.toUpperCase();
+        const first = p[3] || "";
+        const tail = (p[4] || "").replace(/[^\d\s]/g, "");
+        const digits = tail ? `${first}${tail}` : first;
+        found.add(finalizePO(poPrefix, comp, digits));
+      }
+
+      // ------------------------------------------
+      // 5) Post‑repair pass:
+      //    If any candidate looks "short" (e.g., only "PO-CLA-001"),
+      //    try to harvest more digits from the next 20 chars in the source text.
+      // ------------------------------------------
+      const repaired = new Set();
+      for (const po of found) {
+        // A "short" PO often ends at the 3-digit block after company (e.g., PO-CLA-001)
+        const shortCore = /^PO-[A-Z0-9]{2,}-\d{3}$/i.test(po);
+        if (!shortCore) {
+          repaired.add(po);
+          continue;
+        }
+        // Find in the normalized string and look ahead for trailing digits
+        const idx = norm.toUpperCase().indexOf(po);
+        if (idx >= 0) {
+          const lookahead = norm.slice(idx, idx + po.length + 24); // a little window after current hit
+          const more = lookahead.slice(po.length).match(/([ \t\u00A0\-_–—‑]*\d[\d \t\u00A0\-_–—‑]{1,20})/);
+          if (more) {
+            const extraDigits = more[1].replace(/[^\d]/g, ""); // keep digits only
+            if (extraDigits) {
+              const fixed = po.replace(/^(PO-[A-Z0-9]{2,}-\d{3})$/i, `$1${extraDigits}`);
+              repaired.add(fixed.toUpperCase());
+              continue;
+            }
+          }
+        }
+        repaired.add(po); // keep original if nothing extra found
+      }
+
+      return repaired.size ? Array.from(repaired) : null;
+    }
 
       
       // Expanded Detection & Template Mapping
@@ -1526,6 +1737,8 @@ const DDMMYYYY = String.raw`
                     <th>Distribution Details</th>
                     <th>Customer</th>
                     <th>Pass On Customer</th>
+                    <th>Cost Center</th>
+                    <th>Current Account Linking User</th>
                 </tr>
             </thead>
             <tbody>
@@ -1587,6 +1800,7 @@ const DDMMYYYY = String.raw`
                                 passOnValue !== null &&
                                 passOnValue !== "null" &&
                                 passOnValue !== "" &&
+                                passOnValue !== "NO" &&
                                 typeof passOnValue !== "undefined";
 
                             const passToStyle = isPassOnCustomerValid
@@ -1621,6 +1835,8 @@ const DDMMYYYY = String.raw`
                     <td>${match["DistributionDetails"]}</td>
                     <td>${match["Customer"]}</td>
                     <td style="${passToStyle}">${match["Pass On Customer"]}</td>
+                    <td>${match["Cost Center"]}</td>
+                    <td>${match["Current Account Linking User"]}</td>
                 </tr>
                 `;
                         });
@@ -1636,6 +1852,8 @@ const DDMMYYYY = String.raw`
                     <td>N/A</td>
                     <td>N/A</td>
                     <td>Not Found</td>
+                    <td>N/A</td>
+                    <td>N/A</td>
                     <td>N/A</td>
                     <td>N/A</td>
                     <td>N/A</td>
@@ -1826,7 +2044,9 @@ const DDMMYYYY = String.raw`
                           headerDesc: r["PO Header Description"],
                           itemDesc: r["Item Description"],
                           shipTo: r["Ship To Location"],
-                          distribution: r["DistributionDetails"]
+                          distribution: r["DistributionDetails"],
+                          costCenter: r["Cost Center"],
+                          currentAccountLinkedUser: r["Current Account Linking User"]
                         }));
                       });
                     }
@@ -1882,7 +2102,9 @@ const DDMMYYYY = String.raw`
                   headerDesc: r["PO Header Description"],
                   itemDesc: r["Item Description"],
                   shipTo: r["Ship To Location"],
-                  distribution: r["DistributionDetails"]
+                  distribution: r["DistributionDetails"],
+                  costCenter: r["Cost Center"],
+                  currentAccountLinkedUser: r["Current Account Linking User"]
                 });
               });
             });

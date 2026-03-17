@@ -6,6 +6,11 @@
   <title>Invoice Automation – Enhanced Supplier & Client Validation</title>
   <link rel="icon" type="image/x-icon" href="images/validation-icons-7222228.jpg">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.2/dist/tesseract.min.js"></script>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; }
     h2, h3 { color: #003366; }
@@ -203,6 +208,10 @@
         <div class="one-column">
           <button id="convertBtn">Convert to PDF</button>
           <button id="emtyButton">Empty textarea</button>
+        <div class="two-columns">
+          <button id="btnOcr">Run OCR (server)</button>
+          <pre id="ocrPreview" style="white-space:pre-wrap"></pre>
+          </div>  
         </div>
       </div>
     </div>
