@@ -1146,24 +1146,28 @@ async function convertAndProcessBase64(base64String) {
       html += `</table>`;
       linesDiv.innerHTML = html;
     }
-    // Detect Purchase Order Number (robust to whitespace-split digits)
-    // ---------------------------------------------------------------
+    // Detect Purchase Order Number (exactly 8 digits after PO-<COMP>-)
+    // ----------------------------------------------------------------
     function detectPoNumbers(text, company) {
       if (!text) return null;
 
-      // 1) Normalize common PDF/Unicode quirks
-      const norm = normalizeSpaces(normalizeHyphens(text)); // you already have these helpers
+      // 1) Normalize common PDF/Unicode quirks you already handle elsewhere
+      const norm = normalizeSpaces(normalizeHyphens(text)); // NBSP, unicode dashes → ASCII, collapse spaces
+
+      // Clean CompanyID like "CLA"
       const compId = company?.CompanyID
         ? company.CompanyID.replace(/[^A-Z0-9]/gi, "").toUpperCase()
         : null;
 
-      // A helper to finalize a captured PO into canonical "PO-XXX-<digits>" form
-      function finalizePO(prefix, comp, digits) {
-        const cleanDigits = String(digits).replace(/\s+/g, ""); // <-- strip spaces in the numeric tail
-        const core = comp ? `${comp}-${cleanDigits}` : cleanDigits;
-        // keep original "PO-" if present, else add it
-        const po = prefix?.toUpperCase().startsWith("PO") ? `${prefix.toUpperCase()}-${core}` : `PO-${core}`;
-        return po.toUpperCase();
+      // Helper: build canonical "PO-<COMP>-<8digits>" if possible; otherwise return null
+      function buildPO(prefix, comp, rawDigits) {
+        const digits = String(rawDigits || "").replace(/\D+/g, ""); // keep digits only
+        if (digits.length < 8) return null;                          // not enough digits → reject
+        const eight = digits.slice(0, 8);                            // enforce exactly 8
+        const pfx = (prefix || "PO").toUpperCase().replace(/\./g, "").trim(); // normalize P.O. → PO
+        const c = (comp || compId || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (!c) return null; // must have a company chunk
+        return `${pfx}-${c}-${eight}`.toUpperCase();
       }
 
       const found = new Set();
@@ -1173,52 +1177,47 @@ async function convertAndProcessBase64(base64String) {
       //    e.g., "Purchase Order: PO-CLA-001 13157"
       // ---------------------------
       // Groups:
-      //  1: optional "PO" (with dots/spaces allowed)
-      //  2: company block (letters/numbers, at least 2)
-      //  3: a 3+ digit start
-      //  4: tail digits possibly separated by spaces/dashes (at least 1 digit somewhere)
+      //  1: optional "PO" token ("PO", "P.O.", "P O") before the company
+      //  2: company block (letters/numbers, ≥2)
+      //  3: first digits (≥1 digit)
+      //  4: optional trailing digits (can contain spaces/dashes/NBSP)
       const RX_LABEL_AFTER = new RegExp(
         String.raw`(?:buyer\s*reference\s*[:\-]?\s*)?` +
-        String.raw`(?:purchase\s*order|p\.?\s*o\.?\s*order|po|p\.?\s*o\.?)\s*[:\-]?\s*` +
-        // optional explicit PO prefix before company
-        String.raw`(?:(p\.?\s*o\.?)\s*[-:\s]*)?` +
-        // company chunk
-        String.raw`([A-Z0-9]{2,})\s*[-_–—‑]?\s*` +      // accepts various dashes
-        // first digits
-        String.raw`([0-9]{3,})` +
-        // optional split tail, e.g. " 13157" or "- 13157"
-        String.raw`(?:[ \t\u00A0\-_–—‑]*([0-9][0-9 \t\u00A0\-_–—‑]{0,20}))?`,
+        String.raw`(?:purchase\s*order|p\.?\s*o\.?\s*order|order\s*(?:no|number|#)|po|p\.?\s*o\.?)\s*[:\-]?\s*` +
+        String.raw`(?:(p\.?\s*o\.?)\s*[-:\s]*)?` +            // (1) "PO" prefix (optional here)
+        String.raw`([A-Z0-9]{2,})\s*[-_–—‑]?\s*` +            // (2) company
+        String.raw`([0-9]{1,})` +                             // (3) first digit block
+        String.raw`(?:[ \t\u00A0\-_–—‑]*([0-9][0-9 \t\u00A0\-_–—‑]{0,20}))?`, // (4) tail
         "gi"
       );
 
       let m;
       while ((m = RX_LABEL_AFTER.exec(norm)) !== null) {
         const poPrefix = m[1] || "PO";
-        const comp = m[2]?.toUpperCase();
+        const comp = m[2] || compId;
         const firstDigits = m[3] || "";
-        const tailDigits = (m[4] || "").replace(/[^\d\s]/g, "");
-        const digits = tailDigits ? `${firstDigits}${tailDigits}` : firstDigits;
-        found.add(finalizePO(poPrefix, comp, digits));
+        const tailDigits = m[4] || "";
+        const po = buildPO(poPrefix, comp, `${firstDigits}${tailDigits}`);
+        if (po) found.add(po);
       }
 
       // ------------------------------------------
-      // 3) COMPANY-ID + digits (no "PO" in PDF)
-      //     e.g., "CLA-001 13157", or "CLA 001-13157"
+      // 3) COMPANY-ID + digits (no explicit "PO")
+      //     e.g., "CLA-001 13157" or "CLA 001-13157"
       // ------------------------------------------
       if (compId) {
         const RX_COMP_ONLY = new RegExp(
-          String.raw`\b${compId}[ \t\u00A0\-_–—‑]*` +      // company
-          String.raw`([0-9]{3,})` +                       // first digits
-          String.raw`(?:[ \t\u00A0\-_–—‑]*([0-9][0-9 \t\u00A0\-_–—‑]{0,20}))?` + // optional tail
-          String.raw`\b`,
+          String.raw`\b${compId}[ \t\u00A0\-_–—‑]*` +         // company
+          String.raw`([0-9]{1,})` +                          // first digits
+          String.raw`(?:[ \t\u00A0\-_–—‑]*([0-9][0-9 \t\u00A0\-_–—‑]{0,20}))?\b`,
           "gi"
         );
         let c;
         while ((c = RX_COMP_ONLY.exec(norm)) !== null) {
           const first = c[1] || "";
-          const tail = (c[2] || "").replace(/[^\d\s]/g, "");
-          const digits = tail ? `${first}${tail}` : first;
-          found.add(finalizePO("PO", compId, digits));
+          const tail = c[2] || "";
+          const po = buildPO("PO", compId, `${first}${tail}`);
+          if (po) found.add(po);
         }
       }
 
@@ -1227,53 +1226,25 @@ async function convertAndProcessBase64(base64String) {
       //    e.g., "P.O. - CLA - 001 13157"
       // ------------------------------------------
       const RX_PO_PREFIX = new RegExp(
-        String.raw`(p\.?\s*o\.?)\s*[-:\s]*` +            // 1: "PO" with dots/spaces
-        String.raw`([A-Z0-9]{2,})\s*[-_–—‑]?\s*` +       // 2: company
-        String.raw`([0-9]{3,})` +                        // 3: first digits
-        String.raw`(?:[ \t\u00A0\-_–—‑]*([0-9][0-9 \t\u00A0\-_–—‑]{0,20}))?`, // 4: tail
+        String.raw`(p\.?\s*o\.?)\s*[-:\s]*` +                // (1) "PO"
+        String.raw`([A-Z0-9]{2,})\s*[-_–—‑]?\s*` +           // (2) company
+        String.raw`([0-9]{1,})` +                            // (3) first digits
+        String.raw`(?:[ \t\u00A0\-_–—‑]*([0-9][0-9 \t\u00A0\-_–—‑]{0,20}))?`,
         "gi"
       );
       let p;
       while ((p = RX_PO_PREFIX.exec(norm)) !== null) {
         const poPrefix = p[1] || "PO";
-        const comp = p[2]?.toUpperCase();
+        const comp = p[2] || compId;
         const first = p[3] || "";
-        const tail = (p[4] || "").replace(/[^\d\s]/g, "");
-        const digits = tail ? `${first}${tail}` : first;
-        found.add(finalizePO(poPrefix, comp, digits));
+        const tail = p[4] || "";
+        const po = buildPO(poPrefix, comp, `${first}${tail}`);
+        if (po) found.add(po);
       }
 
-      // ------------------------------------------
-      // 5) Post‑repair pass:
-      //    If any candidate looks "short" (e.g., only "PO-CLA-001"),
-      //    try to harvest more digits from the next 20 chars in the source text.
-      // ------------------------------------------
-      const repaired = new Set();
-      for (const po of found) {
-        // A "short" PO often ends at the 3-digit block after company (e.g., PO-CLA-001)
-        const shortCore = /^PO-[A-Z0-9]{2,}-\d{3}$/i.test(po);
-        if (!shortCore) {
-          repaired.add(po);
-          continue;
-        }
-        // Find in the normalized string and look ahead for trailing digits
-        const idx = norm.toUpperCase().indexOf(po);
-        if (idx >= 0) {
-          const lookahead = norm.slice(idx, idx + po.length + 24); // a little window after current hit
-          const more = lookahead.slice(po.length).match(/([ \t\u00A0\-_–—‑]*\d[\d \t\u00A0\-_–—‑]{1,20})/);
-          if (more) {
-            const extraDigits = more[1].replace(/[^\d]/g, ""); // keep digits only
-            if (extraDigits) {
-              const fixed = po.replace(/^(PO-[A-Z0-9]{2,}-\d{3})$/i, `$1${extraDigits}`);
-              repaired.add(fixed.toUpperCase());
-              continue;
-            }
-          }
-        }
-        repaired.add(po); // keep original if nothing extra found
-      }
+      // NOTE: No separate “repair” step needed now; we strictly cut to 8 digits in buildPO()
 
-      return repaired.size ? Array.from(repaired) : null;
+      return found.size ? Array.from(found) : null;
     }
 
       
