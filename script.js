@@ -1524,6 +1524,57 @@ const DDMMYYYY = String.raw`
         return results;
     }
 
+    
+    // ------------------------------------------------------------
+    // PRES Lookup Helper: Match "Individual" to "Werknemer Naam + Voornaam"
+    // ------------------------------------------------------------
+    
+    function findPresEmployee(individual, Pres) {
+        if (!individual || !Array.isArray(Pres)) return null;
+
+        const target = normalizePersonName(individual);
+
+        // Try exact normalized match first
+        let hit = Pres.find(emp => {
+            const full = emp["Werknemer Naam + Voornaam"];
+            return full && normalizePersonName(full) === target;
+        });
+        if (hit) return hit;
+
+        // Soft fallback: token-set containment (helps if PDF adds middle tokens)
+        const tTokens = new Set(target.split(" ").filter(Boolean));
+        hit = Pres.find(emp => {
+            const e = normalizePersonName(emp["Werknemer Naam + Voornaam"]);
+            const eTokens = new Set(e.split(" ").filter(Boolean));
+            // target ⊆ emp or emp ⊆ target
+            const subset = ([...tTokens].every(tok => eTokens.has(tok)) || [...eTokens].every(tok => tTokens.has(tok)));
+            return subset;
+        });
+        return hit || null;
+    }
+
+      // Person Name Normalization (remove honorifics, normalize case/spaces)
+      // ------------------------------------------------------------
+      function normalizePersonName(raw) {
+          if (!raw) return "";
+          let s = String(raw)
+              .replace(/\u00A0/g, " ")           // NBSP -> space
+              .replace(/[.,]/g, " ")             // drop dots/commas that sometimes slip in
+              .replace(/\s+/g, " ")              // collapse spaces
+              .trim();
+
+          // Remove common honorifics (Dutch/EN variants seen on travel PDFs)
+          // Examples: Mr, Mevr, Dhr, Mevrouw, Mvr, Mw, Mrs, Ms (with/without dot)
+          s = s.replace(/\b(mr|mrs|ms|mevr|mevrouw|dhr|mvr|mw)\b\.?/gi, "").replace(/\s+/g, " ").trim();
+
+          // We keep original ordering "LAST LAST FIRST" as it
+          // appears consistently on these BTS slips; PRES uses "De Dieu Jan" which matches token order.
+          // Make a canonical lowercase for comparisons.
+          return s.toLowerCase();
+      }
+
+
+
                           
     // ------------------------------------------------------------
     // Main Processing Logic
@@ -1534,6 +1585,7 @@ const DDMMYYYY = String.raw`
     let Supplier = [];
     let Exception = [];
     let PoData = [];
+    let Pres = [];
 
     (async () => {
       const data = await loadJSONData();
@@ -1543,6 +1595,7 @@ const DDMMYYYY = String.raw`
       Supplier = data.Supplier;
       Exception = data.Exception;
       PoData = data.PoData;
+      Pres = data.Pres;
     })();
 
     document.getElementById("processBtn").addEventListener("click", async () => {
@@ -1950,6 +2003,52 @@ const DDMMYYYY = String.raw`
                 });
             }
         }
+        // ------------------------------------------------------------
+        // Travel Employees → PRES Cost Center Table
+        // ------------------------------------------------------------
+        
+        if (supplierTypeRaw === "Travel_NPO") {
+            const travelBlocks = extractTravelNPOData(text, supplierTypeRaw);
+
+            // Remove any previous rendering (ghost data) - we build within output string
+            // so we don't need to remove DOM nodes here; we ensure we rebuild fresh each run.
+
+            if (travelBlocks && travelBlocks.length > 0) {
+                let tableHtml = `
+                    <div id="travelCostCenterTable" style="margin-top:12px;">
+                      <h4>👤 Traveler Cost Center Mapping</h4>
+                      <table class="standard-table">
+                        <thead>
+                          <tr>
+                            <th>Werknemer Naam + Voornaam</th>
+                            <th>_Kostenplaats</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                `;
+
+                travelBlocks.forEach(block => {
+                    const presRow = findPresEmployee(block.Individual, Pres);
+                    const kostenplaats = presRow ? (presRow["_Kostenplaats"] ?? "N/A") : "Not Found";
+                    tableHtml += `
+                          <tr>
+                            <td>${block.Individual}</td>
+                            <td>${kostenplaats}</td>
+                          </tr>`;
+                });
+
+                tableHtml += `
+                        </tbody>
+                      </table>
+                    </div>
+                `;
+
+                // Append the table right after the validated travel lines
+                output += tableHtml;
+            }
+        }
+
+
 
 
         output += `\n📊 Posting Segment(s): See table below.\n`;
@@ -2183,14 +2282,16 @@ const DDMMYYYY = String.raw`
       manualRes,
       supplierRes,
       exception,
-      poData
+      poData,
+      pres
     ] = await Promise.all([
       fetch("json/Approver.json"),
       fetch("json/Company.json"),
       fetch("json/Manual.json"),
       fetch("json/Supplier.json"),
       fetch("json/Exception.json"),
-      fetch("json/PO_group_qry.json")
+      fetch("json/PO_group_qry.json"),
+      fetch("json/PRESfile.json")
     ]);
 
     const [
@@ -2199,22 +2300,24 @@ const DDMMYYYY = String.raw`
       Manual,
       Supplier,
       Exception,
-      PoData
+      PoData,
+      Pres
     ] = await Promise.all([
       approverRes.json(),
       companyRes.json(),
       manualRes.json(),
       supplierRes.json(),
       exception.json(),
-      poData.json()
+      poData.json(),
+      pres.json()
     ]);
 
     console.log("✅ All JSON tables loaded successfully");
-    return { Approver, Company, Manual, Supplier, Exception, PoData };
+    return { Approver, Company, Manual, Supplier, Exception, PoData, Pres };
 
   } catch (err) {
     console.error("❌ Error loading JSON data:", err);
-    return { Approver: [], Company: [], Manual: [], Supplier: [], Exception: [], PoData: [] };
+    return { Approver: [], Company: [], Manual: [], Supplier: [], Exception: [], PoData: [], Pres:[] };
   }
 }
   
