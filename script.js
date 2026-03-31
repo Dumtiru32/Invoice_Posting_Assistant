@@ -618,7 +618,17 @@ async function convertAndProcessBase64(base64String) {
         .replace(/^-|-$/g, "");         // trim leading/trailing dash
     }
 
-
+    // Normalize "21 %", "21.0 %", "6,00 %" → "21%", "21%", "6%"
+    function normalizeVatKey(vis) {
+      if (!vis) return "";
+      // keep digits + optional decimal/comma before %, then coerce to number (drops trailing .0/ ,00)
+      const m = String(vis).match(/(\d+(?:[.,]\d+)?)\s*%/);
+      if (!m) return "";
+      const n = Number(m[1].replace(',', '.'));
+      // Keep integer if .0, otherwise keep one decimal (e.g., 6.5) — adjust if you never expect decimals
+      const asKey = Number.isInteger(n) ? `${n}%` : `${n}%`;
+      return asKey;
+    }
 
     async function extractTextFromPDF(file) {
       const buf = await file.arrayBuffer();
@@ -1037,7 +1047,28 @@ async function convertAndProcessBase64(base64String) {
         html += `⚠️ No Tax Rates found after "Tax Rate" label.\n`;
 
       } else {
-        html += `🔢 Tax Rates detected: <strong>${vatRates.join(', ')}</strong>\n`;
+        // Keep only VAT rates that exist in the tva table keys
+        const allowedKeys = new Set(Object.keys(tva));           // e.g., "0%", "6%", "12%", "21%"
+        const filteredVatRates = vatRates
+          .map(r => ({ raw: r, key: normalizeVatKey(r) }))       // normalize to key form
+          .filter(x => x.key && allowedKeys.has(x.key));         // keep only known keys
+
+        if (filteredVatRates.length === 0) {
+          html += `🔢 Tax Rates detected: <strong>—</strong>\n`;
+        } else {
+          // Show them in their original visual form, but de-duped by key
+          const seen = new Set();
+          const pretty = [];
+          for (const { raw, key } of filteredVatRates) {
+            if (!seen.has(key)) {
+              seen.add(key);
+              // Optionally reformat to your preferred display: "21 %" from "21%"
+              const display = key.replace('%', ' %');
+              pretty.push(display);
+            }
+          }
+          html += `🔢 Tax Rates detected: <strong>${pretty.join(', ')}</strong>\n`;
+        }
       }
       
 
@@ -1698,30 +1729,102 @@ const DDMMYYYY = String.raw`
 
 
         
-        // STEP 3 — Detect Customer / Approver
-        let approver = null;
+        
 
-        if (supplierTypeRaw.endsWith("NPO")) {
-          for (const a of Approver) {
-            if (normalizeText(text).includes(normalizeText(a.Client))) {
-              approver = a;
+// STEP 3 — Detect ALL Clients + Approvers + Client Numbers (NO BLACKLIST, NO AUTO-ASSIGN)
+let approver = null;
+let detectedClientNames = [];
+let detectedClientNumbers = [];
 
-              output += `✅ Client name "<strong>${a.Client}</strong>" found → Approver: <strong>${a.Approver}</strong>\n`;
+if (supplierTypeRaw.endsWith("NPO")) {
 
-              // ✅ NEW: display predefined Segments if present
-              if (a.Segments && a.Segments.trim()) {
-                output += `📦 Predefined posting segment(s) detected for approver: `;
-                output += `<strong>${a.Segments}</strong>\n`;
-              }
+    const pdfTextNorm = normalizeText(text);
 
-              break;
-            }
-          }
+    // ----------------------------------------------------
+    // 1) DETECT ALL CLIENT NAMES + THE APPROVER FOR EACH
+    // ----------------------------------------------------
+    for (const a of Approver) {
+        const clientNorm = normalizeText(a.Client);
 
-          if (!approver) {
-            output += "⚠️ Approver is required for NPO invoices but was not detected.\n";
-          }
+        if (clientNorm && pdfTextNorm.includes(clientNorm)) {
+            detectedClientNames.push({
+                client: a.Client.trim(),
+                approver: a.Approver.trim(),
+                from: "Client Name"
+            });
         }
+    }
+
+    // Remove duplicates (unique by normalized client)
+    detectedClientNames = detectedClientNames.filter(
+        (v, i, arr) =>
+            arr.findIndex(o => normalizeText(o.client) === normalizeText(v.client)) === i
+    );
+
+    // ----------------------------------------------------
+    // 2) DETECT ALL CLIENT NUMBERS
+    // ----------------------------------------------------
+    for (const a of Approver) {
+        if (a["Client Number"]) {
+
+            const codes = a["Client Number"]
+                .toString()
+                .split(/[;,:)(]/)
+                .map(c => c.trim())
+                .filter(Boolean);
+
+            const foundCode = codes.find(code => text.includes(code));
+
+            if (foundCode) {
+                detectedClientNumbers.push({
+                    client: a.Client.trim(),
+                    approver: a.Approver.trim(),
+                    foundCode,
+                    from: "Client Number"
+                });
+            }
+        }
+    }
+
+    // Deduplicate by client (Client Number hits might duplicate Client Name hits)
+    detectedClientNumbers = detectedClientNumbers.filter(
+        (v, i, arr) =>
+            arr.findIndex(o => normalizeText(o.client) === normalizeText(v.client)) === i
+    );
+
+    // ----------------------------------------------------
+    // 3) MERGE AND DISPLAY ALL DETECTED CLIENTS
+    // ----------------------------------------------------
+    const merged = [...detectedClientNames];
+
+    detectedClientNumbers.forEach(n => {
+        const exists = merged.find(
+            x => normalizeText(x.client) === normalizeText(n.client)
+        );
+        if (!exists) merged.push(n);
+    });
+
+    if (merged.length > 0) {
+        output += `<strong>🔎 Detected Clients & Approvers:</strong><br><br>`;
+
+        merged.forEach(c => {
+            if (c.from === "Client Name") {
+                output += `• <span class="detected-client">${c.client}</span> → Approver: <strong>${c.approver}</strong> <span style="color:#666;">(matched by name)</span><br>`;
+            } else {
+                output += `• <span class="detected-client">${c.client}</span> → Approver: <strong>${c.approver}</strong> <span style="color:#666;">(matched by Client Number: ${c.foundCode})</span><br>`;
+            }
+        });
+
+        output += `<br>⚠️ Multiple matches or ambiguous input — please select manually.<br><br>`;
+    } else {
+        output += `❌ <strong>No Client Names or Client Numbers detected.</strong><br><br>`;
+    }
+
+    // 🔒 IMPORTANT: Do NOT assign "approver" automatically.
+    approver = null;
+}
+
+
 
 
 
@@ -1742,6 +1845,41 @@ const DDMMYYYY = String.raw`
         else {
         output += '⚠️ <strong>The Invoice Number is not detected, check it manually!</strong>\n';
         }
+
+        // --- Reverse charge detection ---
+        const reverseChargeMessage = detectReverseCharge(text);
+        if (reverseChargeMessage) {
+            output += reverseChargeMessage + "\n";
+        }
+
+        
+        // 🔎 Detect Issue Date & Due Date (dd/mm/yyyy after "Issue Date:")
+        let { issueDate, dueDate, debug: dateDebug } = detectIssueAndDueDates(text);
+        
+        issueDate = normalizeInvoiceDate(issueDate);
+        dueDate   = normalizeInvoiceDate(dueDate);
+
+        if (issueDate) {
+          
+          output += `📅 Issue Date: <strong>${issueDate}</strong>\n`;
+        } else {
+          output += `⚠️ Issue Date not found.\n`;
+        }
+        if (dueDate) {
+          
+          output += `⏳ Due Date: <strong>${dueDate}</strong>\n`;
+        } else {
+          output += `⚠️ Due Date (second dd/mm/yyyy after label) not found.\n`;
+        }
+       
+
+
+        //Display Currency Symbol
+        
+        const currencyMatch = text.match(/\b(EUR|USD|GBP|RON|CHF|JPY|€)\b/i);
+        const currency = currencyMatch ? currencyMatch[1].toUpperCase() : "Unknown";
+        output += `💱 Currency detected: <strong>${currency}</strong>\n`;
+
         // 🔍 Detect Purchase Order Number(s) right after invoice number
         const poNumbers = detectPoNumbers(text, company);
         
@@ -1900,39 +2038,7 @@ const DDMMYYYY = String.raw`
          //else {
           //output2.innerHTML += '<form id="invoiceForm" style="margin-top:8px;"><label for="invNum">Insert the Invoice Number:</label><br><input type="text" id="invNum" name="invNum" style="width:200px; margin-top:4px;"><br><br><button type="button" id="checkInvBtn">Check in PDF</button></form>';
         //}
-        // --- Reverse charge detection ---
-        const reverseChargeMessage = detectReverseCharge(text);
-        if (reverseChargeMessage) {
-            output += reverseChargeMessage + "\n";
-        }
-
         
-        // 🔎 Detect Issue Date & Due Date (dd/mm/yyyy after "Issue Date:")
-        let { issueDate, dueDate, debug: dateDebug } = detectIssueAndDueDates(text);
-        
-        issueDate = normalizeInvoiceDate(issueDate);
-        dueDate   = normalizeInvoiceDate(dueDate);
-
-        if (issueDate) {
-          
-          output += `📅 Issue Date: <strong>${issueDate}</strong>\n`;
-        } else {
-          output += `⚠️ Issue Date not found.\n`;
-        }
-        if (dueDate) {
-          
-          output += `⏳ Due Date: <strong>${dueDate}</strong>\n`;
-        } else {
-          output += `⚠️ Due Date (second dd/mm/yyyy after label) not found.\n`;
-        }
-       
-
-
-        //Display Currency Symbol
-        
-        const currencyMatch = text.match(/\b(EUR|USD|GBP|RON|CHF|JPY|€)\b/i);
-        const currency = currencyMatch ? currencyMatch[1].toUpperCase() : "Unknown";
-        output += `💱 Currency detected: <strong>${currency}</strong>\n`;
 
         
         // Wait for input check button click
@@ -1958,23 +2064,23 @@ const DDMMYYYY = String.raw`
         }, 0);
 
         // Fallback by Client Number (supports comma/semicolon)
-        if (supplierTypeRaw.substring(supplierTypeRaw.length - 3) == "NPO"){
-          if (!approver) {
-            for (const a of Approver) {
-              if (a["Client Number"]) {
-                const codes = a["Client Number"].toString().split(/[;,:)(]/).map(c => c.trim()).filter(Boolean);
-                const foundCode = codes.find(code => text.includes(code));
-                if (foundCode) {
-                  approver = a;
-                  output += `✅ Client Number "<strong>${foundCode}</strong>" detected → Approver: <strong>${a.Approver}</strong>\n`;
-                  break;
-                }
-              }
-            }
-          }
+        //if (supplierTypeRaw.substring(supplierTypeRaw.length - 3) == "NPO"){
+          //if (!approver) {
+            //for (const a of Approver) {
+              //if (a["Client Number"]) {
+                //const codes = a["Client Number"].toString().split(/[;,:)(]/).map(c => c.trim()).filter(Boolean);
+                //const foundCode = codes.find(code => text.includes(code));
+                //if (foundCode) {
+                  //approver = a;
+                  //output += `✅ Client Number "<strong>${foundCode}</strong>" detected → Approver: <strong>${a.Approver}</strong>\n`;
+                  //break;
+                //}
+              //}
+            //}
+          //}
 
-          if (!approver) output += `⚠️ No Approver or Client detected in PDF.\n`;
-        }
+          //if (!approver) output += `⚠️ No Approver or Client detected in PDF.\n`;
+        //}
         //Insert Lines
         //Detect Tax Classification on the PDF
         //let ourCountry = ourCompanyVAT ? ourCompanyVAT.slice(0, 2) : "??"; //Country acronym

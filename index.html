@@ -5,208 +5,13 @@
   <meta charset="utf-8"/>
   <title>Invoice Automation – Enhanced Supplier & Client Validation</title>
   <link rel="icon" type="image/x-icon" href="images/validation-icons-7222228.jpg">
+  <link rel="stylesheet" href="style.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc =
       "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
   </script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.2/dist/tesseract.min.js"></script>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    h2, h3 { color: #003366; }
-    input, button { margin: 6px 0; padding: 6px; height: 30px; width: fit-content;}
-    #result {
-      white-space: pre-wrap;
-      background: #f9f9f9;
-      padding: 12px;
-      border-radius: 8px;
-      margin-top: 12px;
-      border: 1px solid #ddd;
-    }
-    
-    .one-row{
-      display: flex;
-      flex-direction: row;
-    }
-    .two-columns {
-        display: grid;
-        grid-template-columns: 1fr 1fr; /* two equal columns */
-        gap: 20px;
-        align-items: start;
-      }
-
-      .two-columns > div {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-      .one-column > div {
-        display: flex;
-        flex-direction: column;
-      }
-
-      textarea {
-        width: 100%;
-        height: 90px;
-      }
-      
-      button, input[type="file"] {
-          width: fit-content;
-          height: 30px;
-        }
-      #emtyButton{
-        visibility: hidden;
-      }
-      
-      /* Floating button */
-      #ap-ai-fab {
-        position: fixed;
-        right: 18px;
-        bottom: 18px;
-        width: 56px;
-        height: 56px;
-        border-radius: 50%;
-        background: #0a66ff;
-        color: #fff;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font: 600 16px/1 system-ui, Segoe UI, Roboto, Arial, sans-serif;
-        box-shadow: 0 6px 18px rgba(0,0,0,.25);
-        cursor: pointer;
-        user-select: none;
-        z-index: 9998;
-      }
-      #ap-ai-fab:hover { filter: brightness(1.05); }
-
-      /* Chat container */
-      #ap-ai-chat {
-        position: fixed;
-        right: 18px;
-        bottom: 86px; /* above the FAB */
-        width: 380px;
-        max-width: calc(100vw - 36px);
-        z-index: 9999;
-      }
-
-      /* Panel */
-      .ap-ai-chat__panel {
-        background: #fff;
-        border: 1px solid #e5e7eb;
-        border-radius: 12px;
-        overflow: hidden;
-        display: grid;
-        grid-template-rows: auto 1fr auto;
-        height: 520px;
-        box-shadow: 0 10px 30px rgba(0,0,0,.25);
-      }
-
-      /* Header */
-      .ap-ai-chat__header {
-        background: #0a66ff;
-        color: #fff;
-        display: flex;
-        align-items: center;
-        padding: 10px 12px;
-        gap: 8px;
-        cursor: move; /* draggable handle */
-      }
-      .ap-ai-chat__title {
-        font-weight: 600;
-        flex: 1;
-      }
-      .ap-ai-chat__actions {
-        display: flex;
-        gap: 4px;
-      }
-      .ap-ai-btn {
-        border: none;
-        border-radius: 6px;
-        padding: 6px 8px;
-        background: #eef2ff;
-        color: #111827;
-        cursor: pointer;
-      }
-      .ap-ai-btn--ghost {
-        background: transparent;
-        color: #fff;
-      }
-      .ap-ai-btn--primary {
-        background: #0a66ff;
-        color: #fff;
-      }
-      .ap-ai-btn:disabled {
-        opacity: .6;
-        cursor: not-allowed;
-      }
-
-      /* Messages area */
-      .ap-ai-chat__messages {
-        padding: 12px;
-        overflow: auto;
-        background: #fafafa;
-      }
-      .ap-ai-msg {
-        max-width: 80%;
-        margin: 8px 0;
-        padding: 10px 12px;
-        border-radius: 10px;
-        font: 14px/1.35 system-ui, Segoe UI, Roboto, Arial, sans-serif;
-        white-space: pre-wrap;
-      }
-      .ap-ai-msg--user {
-        background: #e0ecff;
-        margin-left: auto;
-        border-top-right-radius: 4px;
-      }
-      .ap-ai-msg--bot {
-        background: #fff;
-        margin-right: auto;
-        border-top-left-radius: 4px;
-        border: 1px solid #ececec;
-      }
-      .ap-ai-msg h4 { margin: 0 0 6px 0; font-size: 14px; font-weight: 700; }
-      .ap-ai-msg ul { margin: 6px 0 0 18px; }
-      .ap-ai-msg .ap-ai-small { color: #6b7280; font-size: 12px; }
-
-      /* Composer */
-      .ap-ai-chat__composer {
-        border-top: 1px solid #e5e7eb;
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 8px;
-        padding: 10px;
-        background: #fff;
-      }
-      #ap-ai-input {
-        resize: none;
-        border: 1px solid #e5e7eb;
-        border-radius: 8px;
-        padding: 8px 10px;
-        font: 14px/1.35 system-ui, Segoe UI, Roboto, Arial, sans-serif;
-      }
-      
-      .standard-table {
-          border-collapse: collapse;
-          margin-top: 6px;
-          width: 60%;
-      }
-
-      .standard-table th {
-          background: #eef;
-          text-align: left;
-          padding: 6px;
-      }
-
-      .standard-table td {
-          padding: 6px;
-          border: 1px solid #ccc;
-      }
-
-      
-
-
-  </style>
 
 </head>
 <body>
@@ -227,7 +32,7 @@
           <button id="emtyButton">Empty textarea</button>
         <div class="two-columns">
           <button id="btnOcr">Run OCR (server)</button>
-          <pre id="ocrPreview" style="white-space:pre-wrap"></pre>
+          
           </div>  
         </div>
       </div>
