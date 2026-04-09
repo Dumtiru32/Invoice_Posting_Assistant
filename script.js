@@ -1560,29 +1560,35 @@ const DDMMYYYY = String.raw`
     // PRES Lookup Helper: Match "Individual" to "Werknemer Naam + Voornaam"
     // ------------------------------------------------------------
     
-    function findPresEmployee(individual, Pres) {
-        if (!individual || !Array.isArray(Pres)) return null;
+    
+    function findPresEmployees(individual, Pres) {
+        if (!individual || !Array.isArray(Pres)) return [];
 
         const target = normalizePersonName(individual);
 
-        // Try exact normalized match first
-        let hit = Pres.find(emp => {
-            const full = emp["Werknemer Naam + Voornaam"];
-            return full && normalizePersonName(full) === target;
-        });
-        if (hit) return hit;
+        // First: strict normalized matches
+        let hits = Pres.filter(emp =>
+            emp["Werknemer Naam + Voornaam"] &&
+            normalizePersonName(emp["Werknemer Naam + Voornaam"]) === target
+        );
 
-        // Soft fallback: token-set containment (helps if PDF adds middle tokens)
+        if (hits.length > 0) return hits;
+
+        // Second: token-subset fuzzy fallback
         const tTokens = new Set(target.split(" ").filter(Boolean));
-        hit = Pres.find(emp => {
-            const e = normalizePersonName(emp["Werknemer Naam + Voornaam"]);
-            const eTokens = new Set(e.split(" ").filter(Boolean));
-            // target ⊆ emp or emp ⊆ target
-            const subset = ([...tTokens].every(tok => eTokens.has(tok)) || [...eTokens].every(tok => tTokens.has(tok)));
-            return subset;
+
+        hits = Pres.filter(emp => {
+            const eNorm = normalizePersonName(emp["Werknemer Naam + Voornaam"]);
+            const eTokens = new Set(eNorm.split(" ").filter(Boolean));
+
+            // require that tokens substantially overlap
+            const overlap = [...tTokens].filter(tok => eTokens.has(tok)).length;
+            return overlap >= Math.min(tTokens.size, eTokens.size);
         });
-        return hit || null;
+
+        return hits;
     }
+
 
       // Person Name Normalization (remove honorifics, normalize case/spaces)
       // ------------------------------------------------------------
@@ -1731,7 +1737,8 @@ const DDMMYYYY = String.raw`
         
         
 
-// STEP 3 — Detect ALL Clients + Approvers + Client Numbers (NO BLACKLIST, NO AUTO-ASSIGN)
+
+// STEP 3 — Detect ALL Clients + Approvers + Segments + Client Numbers (NO BLACKLIST, NO AUTO-ASSIGN)
 let approver = null;
 let detectedClientNames = [];
 let detectedClientNumbers = [];
@@ -1741,7 +1748,7 @@ if (supplierTypeRaw.endsWith("NPO")) {
     const pdfTextNorm = normalizeText(text);
 
     // ----------------------------------------------------
-    // 1) DETECT ALL CLIENT NAMES + THE APPROVER FOR EACH
+    // 1) DETECT ALL CLIENT NAMES + APPROVER + SEGMENTS
     // ----------------------------------------------------
     for (const a of Approver) {
         const clientNorm = normalizeText(a.Client);
@@ -1750,12 +1757,13 @@ if (supplierTypeRaw.endsWith("NPO")) {
             detectedClientNames.push({
                 client: a.Client.trim(),
                 approver: a.Approver.trim(),
+                segments: a.Segments?.trim() || null,
                 from: "Client Name"
             });
         }
     }
 
-    // Remove duplicates (unique by normalized client)
+    // Deduplicate by normalized client
     detectedClientNames = detectedClientNames.filter(
         (v, i, arr) =>
             arr.findIndex(o => normalizeText(o.client) === normalizeText(v.client)) === i
@@ -1766,7 +1774,6 @@ if (supplierTypeRaw.endsWith("NPO")) {
     // ----------------------------------------------------
     for (const a of Approver) {
         if (a["Client Number"]) {
-
             const codes = a["Client Number"]
                 .toString()
                 .split(/[;,:)(]/)
@@ -1779,50 +1786,65 @@ if (supplierTypeRaw.endsWith("NPO")) {
                 detectedClientNumbers.push({
                     client: a.Client.trim(),
                     approver: a.Approver.trim(),
-                    foundCode,
-                    from: "Client Number"
+                    segments: a.Segments?.trim() || null,
+                    from: "Client Number",
+                    foundCode
                 });
             }
         }
     }
 
-    // Deduplicate by client (Client Number hits might duplicate Client Name hits)
+    // Deduplicate client numbers
     detectedClientNumbers = detectedClientNumbers.filter(
         (v, i, arr) =>
             arr.findIndex(o => normalizeText(o.client) === normalizeText(v.client)) === i
     );
 
     // ----------------------------------------------------
-    // 3) MERGE AND DISPLAY ALL DETECTED CLIENTS
+    // 3) MERGE CLIENT NAME MATCHES + CLIENT NUMBER MATCHES
     // ----------------------------------------------------
     const merged = [...detectedClientNames];
 
-    detectedClientNumbers.forEach(n => {
+    detectedClientNumbers.forEach(num => {
         const exists = merged.find(
-            x => normalizeText(x.client) === normalizeText(n.client)
+            x => normalizeText(x.client) === normalizeText(num.client)
         );
-        if (!exists) merged.push(n);
+        if (!exists) merged.push(num);
     });
 
+    // ----------------------------------------------------
+    // 4) DISPLAY OUTPUT
+    // ----------------------------------------------------
     if (merged.length > 0) {
         output += `<strong>🔎 Detected Clients & Approvers:</strong><br><br>`;
 
         merged.forEach(c => {
-            if (c.from === "Client Name") {
-                output += `• <span class="detected-client">${c.client}</span> → Approver: <strong>${c.approver}</strong> <span style="color:#666;">(matched by name)</span><br>`;
+            let line = `• <span class="detected-client">${c.client}</span> → Approver: <strong>${c.approver}</strong>`;
+
+            if (c.from === "Client Number") {
+                line += ` <span style="color:#666;">(matched by Client Number: ${c.foundCode})</span>`;
             } else {
-                output += `• <span class="detected-client">${c.client}</span> → Approver: <strong>${c.approver}</strong> <span style="color:#666;">(matched by Client Number: ${c.foundCode})</span><br>`;
+                line += ` <span style="color:#666;">(matched by name)</span>`;
             }
+
+            // ✔ Show Segments if not empty
+            if (c.segments) {
+                line += `<br>&nbsp;&nbsp;&nbsp;&nbsp;📦 Segments: <code>${c.segments}</code>`;
+            }
+
+            output += line + "<br>";
         });
 
-        output += `<br>⚠️ Multiple matches or ambiguous input — please select manually.<br><br>`;
-    } else {
+        output += `<br>⚠️ Multiple possible clients — please choose manually.<br><br>`;
+    } 
+    else {
         output += `❌ <strong>No Client Names or Client Numbers detected.</strong><br><br>`;
     }
 
-    // 🔒 IMPORTANT: Do NOT assign "approver" automatically.
+    // IMPORTANT: Do NOT auto-assign approver
     approver = null;
 }
+
 
 
 
@@ -2133,21 +2155,47 @@ if (supplierTypeRaw.endsWith("NPO")) {
                         <tbody>
                 `;
 
-                travelBlocks.forEach(block => {
-                    const presRow = findPresEmployee(block.Individual, Pres);
-                    const kostenplaats = presRow ? (presRow["_Kostenplaats"] ?? "N/A") : "Not Found";
+                
+              travelBlocks.forEach(block => {
+                  
+                const matches = findPresEmployees(block.Individual, Pres);
+
+                    let presNames = "Not found";
+                    let kostenplaatsen = "Not found";
+
+                    if (matches.length > 0) {
+
+                        // Collect unique PRES names
+                        presNames = [
+                            ...new Set(
+                                matches
+                                    .map(m => m["Werknemer Naam + Voornaam"])
+                                    .filter(Boolean)
+                            )
+                        ].join(" | ");
+
+                        // Collect unique cost centers
+                        kostenplaatsen = [
+                            ...new Set(
+                                matches
+                                    .map(m => m["_Kostenplaats"])
+                                    .filter(Boolean)
+                            )
+                        ].join(", ");
+                    }
+
                     tableHtml += `
-                          <tr>
-                            <td>${block.Individual}</td>
-                            <td>${kostenplaats}</td>
-                          </tr>`;
+                        <tr>
+                            <td>
+                                <strong>Invoice:</strong> ${block.Individual}<br>
+                                <strong>PRES:</strong> ${presNames}
+                            </td>
+                            <td>${kostenplaatsen}</td>
+                        </tr>
+                    `;
                 });
 
-                tableHtml += `
-                        </tbody>
-                      </table>
-                    </div>
-                `;
+
 
                 // Append the table right after the validated travel lines
                 output += tableHtml;
