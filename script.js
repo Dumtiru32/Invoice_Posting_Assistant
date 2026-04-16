@@ -1610,6 +1610,21 @@ const DDMMYYYY = String.raw`
           return s.toLowerCase();
       }
 
+      
+          // ------------------------------------------------------------
+          // Split multiple individuals listed on one invoice line
+          // Example:
+          // "ZDAN PAULA Mrs, SOKOL VOLODYMYR Mr, DRAA AMIRA Ms"
+          // → ["ZDAN PAULA Mrs", "SOKOL VOLODYMYR Mr", "DRAA AMIRA Ms"]
+          // ------------------------------------------------------------
+          function splitIndividuals(individualRaw) {
+              if (!individualRaw) return [];
+
+              return individualRaw
+                  .split(",")                 // split by comma
+                  .map(s => s.trim())
+                  .filter(Boolean);
+          }
 
 
                           
@@ -2156,44 +2171,55 @@ if (supplierTypeRaw.endsWith("NPO")) {
                 `;
 
                 
-              travelBlocks.forEach(block => {
-                  
-                const matches = findPresEmployees(block.Individual, Pres);
+              
 
-                    let presNames = "Not found";
-                    let kostenplaatsen = "Not found";
+travelBlocks.forEach(block => {
 
-                    if (matches.length > 0) {
+    // ✅ NEW: split combined names into individual persons
+    const individuals = splitIndividuals(block.Individual);
 
-                        // Collect unique PRES names
-                        presNames = [
-                            ...new Set(
-                                matches
-                                    .map(m => m["Werknemer Naam + Voornaam"])
-                                    .filter(Boolean)
-                            )
-                        ].join(" | ");
+    individuals.forEach(invoiceName => {
 
-                        // Collect unique cost centers
-                        kostenplaatsen = [
-                            ...new Set(
-                                matches
-                                    .map(m => m["_Kostenplaats"])
-                                    .filter(Boolean)
-                            )
-                        ].join(", ");
-                    }
+        const matches = findPresEmployees(invoiceName, Pres);
 
-                    tableHtml += `
-                        <tr>
-                            <td>
-                                <strong>Invoice:</strong> ${block.Individual}<br>
-                                <strong>PRES:</strong> ${presNames}
-                            </td>
-                            <td>${kostenplaatsen}</td>
-                        </tr>
-                    `;
-                });
+        let presNames = "Not found";
+        let kostenplaatsen = "Not found";
+
+        if (matches.length > 0) {
+
+            // Unique PRES names
+            presNames = [
+                ...new Set(
+                    matches
+                        .map(m => m["Werknemer Naam + Voornaam"])
+                        .filter(Boolean)
+                )
+            ].join(" | ");
+
+            // Unique Cost Centers
+            kostenplaatsen = [
+                ...new Set(
+                    matches
+                        .map(m => m["_Kostenplaats"])
+                        .filter(Boolean)
+                )
+            ].join(", ");
+        }
+
+        // ✅ One row PER PERSON
+        tableHtml += `
+            <tr>
+                <td>
+                    <strong>Invoice:</strong> ${invoiceName}<br>
+                    <strong>PRES:</strong> ${presNames}
+                </td>
+                <td>${kostenplaatsen}</td>
+            </tr>
+        `;
+    });
+});
+
+
 
 
 
