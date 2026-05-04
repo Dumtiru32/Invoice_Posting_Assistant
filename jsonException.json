@@ -1,0 +1,6 @@
+[
+  {"ID": 1, "ExceptionID": "CLA", "ExceptionType": "Transport_NPO", "ExceptionBTW": "DE814584193", "SegmentException": "CLA.141.6141030.605039.15001.CTSMC.999.BE12000.ACTION.99999, Approver: Reniers, Cato"},
+  {"ID": 2, "ExceptionID": "CLA", "ExceptionType": "Software_PO", "ExceptionBTW": "NL820544991B01", "SegmentException": "If it doesn't have a PE number, it should be assigned to Gwenny."},
+  {"ID": 3, "ExceptionID": "CLA", "ExceptionType": "Consumables_PO", "ExceptionBTW": "BE0447686672", "SegmentException": "If it doesn't have a PE number, it should be assigned to Gwenny."},
+  {"ID": 4, "ExceptionID": "CLA", "ExceptionType": "Consumables_PO", "ExceptionBTW": "FR63429253438", "SegmentException": "If it doesn't have a PE number, it should be assigned to Gwenny."}
+]

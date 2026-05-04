@@ -917,10 +917,12 @@ async function convertAndProcessBase64(base64String) {
   const normalized = text.toLowerCase();
 
   const invoiceKeywords = ["invoice", "factuur", "fattura", "factura", "rechnung", "facture"];
-  const creditKeywords = ["creditnota", "krediet nota", "kredietnota", "credit nota", "CREDIT MEMO", "credit memo"];
-
+  const creditKeywords = ["creditnota", "krediet nota", "credit nota", "CREDIT MEMO", "credit memo"];
+  const proformaKeywords = ["proforma", "proforma factuur"];
+  if (proformaKeywords.some(k => normalized.includes(k))) return "Proforma";  
   if (creditKeywords.some(k => normalized.includes(k))) return "Credit Note";
   if (invoiceKeywords.some(k => normalized.includes(k))) return "Invoice";
+  
   
   return "Other";
   }
@@ -942,8 +944,11 @@ async function convertAndProcessBase64(base64String) {
   }
     function detectInvoiceNumberPeppol(text, supplier) {
     if (!supplier || !supplier["InvoiceN_label"]) return null;
-    
-    const label1 = detectDocumentType(text) == "Invoice" ? "INVOICE Number: " : "CREDIT MEMO Number: ";
+    const docTypes = detectDocumentType(text);
+    const label1 = docTypes === "Invoice" ? "INVOICE Number: " 
+             : docTypes === "Credit Note" ? "CREDIT MEMO Number: " 
+             : docTypes === "Proforma" ? "Proforma invoice Number: " 
+             : "Default Number: ";
     const label = "Document Currency Code:";
     const patternRight1 = new RegExp(`${label1}\\s*[:\\-]?\\s*([A-Za-z0-9\\-/]+)`, "i");
     const patternRight = new RegExp(`${label}\\s*[:\\-]?\\s*([A-Za-z0-9\\-/]+)`, "i");
@@ -1867,7 +1872,15 @@ if (supplierTypeRaw.endsWith("NPO")) {
 
         // --- Detect document type ---
         const docType = detectDocumentType(text);
-        output += `🧾 Document Type: <strong>${docType}</strong>\n`;
+        if (docType === 'Invoice'){
+          output += `🧾 Document Type: <strong>${docType}</strong>\n`;
+        }
+        else {
+          output += `🧾 Document Type: <div style="background-color:red; color:white; font-weight:bold; padding:1px 1px;">
+                      ${docType}
+                      </div>\n`
+        }
+        
 
         // --- Detect invoice number ---
         const invoiceNumber = detectInvoiceNumber(text, supplier);
@@ -1916,6 +1929,43 @@ if (supplierTypeRaw.endsWith("NPO")) {
         const currencyMatch = text.match(/\b(EUR|USD|GBP|RON|CHF|JPY|€)\b/i);
         const currency = currencyMatch ? currencyMatch[1].toUpperCase() : "Unknown";
         output += `💱 Currency detected: <strong>${currency}</strong>\n`;
+
+  // --------------------------------------------------------------------
+  // NEW: Exception/Supplier relational check after "Currency detected"
+  
+
+  try {
+    // Guard rails: ensure the expected objects exist in scope
+    // If your architecture changes later (e.g., modularization), you may need to pass these in.
+    if (!Array.isArray(Exception)) {
+      // Placeholder/comment per instructions: data source reference needed if not in scope
+      console.warn("Exception table is not in scope here. Ensure Exception JSON is loaded and accessible.");
+    } else if (!company?.CompanyID) {
+      console.warn("CompanyID is missing; cannot compare Exception.ExceptionID === CompanyID.");
+    } else if (!supplier?.VAT) {
+      console.warn("Supplier VAT is missing; cannot compare Exception.ExceptionBTW === Supplier.VAT.");
+    } else {
+      // STRICT (===) comparisons as required
+      const matchedException = Exception.find(e =>
+        e?.ExceptionID === company.CompanyID &&
+        e?.ExceptionBTW === supplier.VAT
+      );
+
+      // Append ONLY if SegmentException exists (avoid undefined outputs)
+      
+    const segEx = matchedException?.SegmentException;
+    if (typeof segEx === "string" && segEx.trim() !== "") {
+      // NEW: styled line directly after "Currency detected"
+      output += `<div style="background-color:red; color:white; font-weight:bold; padding:4px 6px; display:inline-block;">
+                  ${segEx.trim()}
+                </div>\n`;
+    }
+
+    }
+  } catch (e) {
+    console.error("Exception comparison/appending failed:", e);
+  }
+
 
         // 🔍 Detect Purchase Order Number(s) right after invoice number
         const poNumbers = detectPoNumbers(text, company);
