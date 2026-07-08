@@ -584,12 +584,21 @@ async function convertAndProcessBase64(base64String) {
         .filter(Boolean);
     }
     // Utility: normalize VAT number (remove BE prefix, dots, spaces, etc.)
-    function normalizeVAT(v) {
-      return (v || "").toString().replace(/[^0-9]/g, "").replace(/^0+/, "").replace(/[ÓÒÔÕÖ]/gi,"0");
+    function normalizeVAT(value) {
+      if (value == null) return "";
+      return String(value)
+         .trim()
+         .toUpperCase()
+         .replace(/^[A-Z]{2}/, "")  // remove country code prefix18    
+         .replace(/[ÓÒÔÕÖ]/gi, "0")
+         .replace(/[^0-9]/g, "")    // keep digits only20    
+         .replace(/^0+/, "");       // remove leading zeros
     }
 
     function normalizeText(s) {
-      return (s || "").toLowerCase().replace(/[^a-z0-9]/g, "").trim();
+      return (s || "").toLowerCase().replace(/\b(nv|bv|bvba|sa|sprl|gmbh|ag|ltd|limited|inc)\b/g,"")
+      replace(/[^a-z0-9]/g, "")
+      .trim();
     }
 
     function normalizeHyphens(str) {
@@ -648,6 +657,51 @@ async function convertAndProcessBase64(base64String) {
       const unique = [...new Set(matches)];
       const ourVATs = Company.map(c => normalizeVAT(c.CompanyBTW));
       return unique.filter(v => !ourVATs.includes(normalizeVAT(v)));
+    }
+
+    /**
+     * Determines the preferred lookup value for a company.
+     *
+     * Priority:
+     * 1. CompanyOfficialName
+     * 2. CompanyBTW
+     *
+     * Returns:
+     * {
+     *   type: "name" | "vat",
+     *   value: string
+     * }
+     * OR null if neither value exists.
+     */
+    function getCompanyLookupValue(companyRow) {
+      if (!companyRow) {
+        console.warn("Company object is missing.");
+        return null;
+      }
+
+      const officialName = companyRow?.CompanyOfficialName?.trim();
+
+      if (officialName) {
+        return {
+          type: "name",
+          value: officialName
+        };
+      }
+
+      const companyVAT = companyRow?.CompanyBTW?.trim();
+
+      if (companyVAT) {
+        return {
+          type: "vat",
+          value: companyVAT
+        };
+      }
+
+      console.warn(
+        "Company lookup skipped: neither CompanyOfficialName nor CompanyBTW is available."
+      );
+
+      return null;
     }
 
     function getManual(companyId, supplierTypeRaw) {
@@ -1726,22 +1780,102 @@ const DDMMYYYY = String.raw`
         }
         
 
-        // STEP 2 — Company VAT check
-        let ourCompanyVAT = null;
-        let company = null;
-        //loop through all know company VATs and check which one is found in the PDF text
-        for (const c of Company) {
-          const vatNorm = normalizeVAT(c.CompanyBTW);  // e.g. "BE0464418182" → "464418182"
-          const textNorm = normalizeVAT(text);         // remove letters, dots, spaces
-          if (textNorm.includes(vatNorm)) {
-            ourCompanyVAT = c.CompanyBTW;
+        // STEP 2 — Company detection
+    let ourCompanyVAT = null;
+    let company = null;
+    let companyMatchMethod = null;
+
+    const normalizedPdfText = normalizeText(text);
+
+    for (const c of Company) {
+
+        // PRIORITY 1: CompanyOfficialName
+        const visibleCompanyMatch =
+            c?.CompanyOfficialName &&
+            normalizedPdfText.includes(
+                normalizeText(c.CompanyOfficialName)
+            );
+
+        if (visibleCompanyMatch) {
             company = c;
+            ourCompanyVAT = c.CompanyBTW;
+            companyMatchMethod = "NAME";
+
+            console.group("COMPANY MATCH");
+
+            console.log("Company:", c.CompanyName);
+            console.log("OfficialName:", c.CompanyOfficialName);
+
+            const searchValue = normalizeText(c.CompanyOfficialName);
+            const idx = normalizedPdfText.indexOf(searchValue);
+
+            console.log("Normalized Search:", searchValue);
+            console.log("Found At Position:", idx);
+
+            if (idx >= 0) {
+                console.log(
+                    "Context:",
+                    normalizedPdfText.substring(
+                        Math.max(0, idx - 50),
+                        idx + searchValue.length + 50
+                    )
+                );
+            }
+
+            console.groupEnd();
+
             break;
-          }
         }
 
-        if (company) output += `✅ Our company VAT (<strong>${ourCompanyVAT}</strong>) detected (${company.CompanyName}).\n`;
-        else output += `⚠️ <strong>Our company VAT not detected.</strong>\n`;
+        // PRIORITY 2: VAT fallback
+        const vatNorm = normalizeVAT(c.CompanyBTW);
+
+        if (
+            vatNorm &&
+            normalizeVAT(text).includes(vatNorm)
+        ) {
+            company = c;
+            ourCompanyVAT = c.CompanyBTW;
+            companyMatchMethod = "VAT";
+
+            console.warn(
+                `⚠️ Company matched by VAT fallback: ${c.CompanyBTW}`
+            );
+
+            break;
+        }
+    }
+
+
+
+        if (company) {
+
+        output += `✅ Company detected: <strong>${company.CompanyName}</strong>\n`;
+
+        if (companyMatchMethod === "NAME") {
+
+            output += `✅ Matched by Official Company Name\n`;
+
+            output += `🏦 Company VAT: <strong>${company.CompanyBTW}</strong>\n`;
+
+        } else if (companyMatchMethod === "VAT") {
+
+            output += `
+            <div style="background:red;color:white;padding:6px;font-weight:bold;">
+                ⚠️ Company matched ONLY by VAT number.
+                The VAT may come from hidden PDF text.
+                Please verify manually.
+            </div>`;
+
+            output += `🏦 VAT detected: <strong>${company.CompanyBTW}</strong>\n`;
+        }
+
+    } else {
+
+        output += `⚠️ <strong>No company detected.</strong>\n`;
+
+    }
+            
 
         //Check if SullplierType ends with PO or NPO
         
