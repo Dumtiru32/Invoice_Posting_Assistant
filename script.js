@@ -1516,103 +1516,261 @@ const DDMMYYYY = String.raw`
       }
 
       /**
-       * Extracts travel data blocks strictly following the sequence:
-       * Description -> Reiziger -> Bestemming.
-       * Specifically excludes cases where a "Description:" is immediately followed 
-       * by another "Description:" label.
+       * Extracts Travel_NPO data.
+       *
+       * Keeps existing primary-block logic:
+       *   Description -> Reiziger -> Bestemming -> Name
+       *
+       * Adds secondary-block logic:
+       *   second Description: -> Trip Purpose / Project
+       *
+       * Defensive behavior:
+       *   - If the second Description block is missing, TripPurpose and Project remain null.
+       *   - Existing multi-person handling remains unchanged because Individual is still returned
+       *     exactly as before and splitIndividuals() continues to handle comma-separated names.
        */
-      
       function extractTravelNPOData(text, supplierType) {
-        // Logic gate
-        if (supplierType !== "Travel_NPO") return null;
+          // Logic gate
+          if (supplierType !== "Travel_NPO") return null;
 
-        // Fallback for bad inputs
-        if (typeof text !== "string" || !text.trim()) return [];
+          // Fallback for bad inputs
+          if (typeof text !== "string" || !text.trim()) return [];
 
-        // Normalize CRLF to LF; treat as a continuous stream
-        const normalized = text.replace(/\r\n/g, "\n");
+          // Normalize CRLF to LF; keep stream behavior compatible with existing parser
+          const normalized = text.replace(/\r\n/g, "\n");
 
-        // We will scan the text for label boundaries, enforcing exact order:
-        // (Description|Omschrijving) -> Reiziger -> Bestemming -> Name
-        // If the next encountered label isn't the expected one, we discard the block.
+          // ------------------------------------------------------------
+          // Small local helpers - scoped to Travel_NPO only
+          // ------------------------------------------------------------
+          function cleanTravelValue(value) {
+              return String(value || "")
+                  .replace(/\s+/g, " ")
+                  .trim();
+          }
 
-        const LABELS_RE = /(Description:|Omschrijving:|Reiziger:|Bestemming:|Name:)/g;
+          function escapeRegex(value) {
+              return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          }
 
-        // Helper to find the next label from a given index
-        function findNextLabel(startIdx) {
-            LABELS_RE.lastIndex = startIdx;
-            const m = LABELS_RE.exec(normalized);
-            if (!m) return null;
-            return {
-                label: m[1],
-                index: m.index,
-                end: m.index + m[0].length // position right after the label
-            };
-        }
+          /**
+           * Returns the block after the SECOND "Description:" label.
+           * Example supported:
+           *   2 Description: Trip Purpose: Trip project SUNSTAR Name: [CARF] ...
+           */
+          function getSecondDescriptionBlock(fullText) {
+              const descRegex = /Description\s*:/gi;
+              const matches = [];
+              let match;
 
-        const results = [];
-        let cursor = 0;
+              while ((match = descRegex.exec(fullText)) !== null) {
+                  matches.push({
+                      index: match.index,
+                      end: match.index + match[0].length
+                  });
+              }
 
-        while (true) {
-            const desc = findNextLabel(cursor);
-            if (!desc) break;
+              // Need at least two Description labels
+              if (matches.length < 2) return "";
 
-            // Only start a block at Description or Omschrijving
-            if (desc.label !== "Description:" && desc.label !== "Omschrijving:") {
-                // Skip unrelated labels and keep scanning
-                cursor = desc.end;
-                continue;
-            }
+              const secondDesc = matches[1];
+              const tail = fullText.slice(secondDesc.end);
 
-            // The very next label must be Reiziger:
-            const nextAfterDesc = findNextLabel(desc.end);
-            if (!nextAfterDesc) break;
+              // Stop at the next strong boundary.
+              // Name: is intentionally included because the BTS sample has:
+              // Description: Trip Purpose: Trip project SUNSTAR Name: [CARF] ...
+              const boundaryRegex =
+                  /\b(Name|Payment ID|Method|VAT Summary|Customer|Invoice Reference|Products and Services|Quantity|DESCRIPTION)\s*:?/i;
 
-            if (nextAfterDesc.label !== "Reiziger:") {
-                // Wrong next label (e.g., Name: or another Description:) -> ignore this potential block
-                // Move cursor forward just after the Description to keep searching for the next valid one
-                cursor = desc.index + 1;
-                continue;
-            }
+              const boundaryMatch = tail.match(boundaryRegex);
 
-            // The very next label after Reiziger must be Bestemming:
-            const nextAfterReiziger = findNextLabel(nextAfterDesc.end);
-            if (!nextAfterReiziger) break;
+              return cleanTravelValue(
+                  boundaryMatch ? tail.slice(0, boundaryMatch.index) : tail
+              );
+          }
 
-            if (nextAfterReiziger.label !== "Bestemming:") {
-                // Wrong order -> ignore this block
-                cursor = nextAfterDesc.index + 1;
-                continue;
-            }
+          /**
+           * Extracts a value from a local block, stopping before known next labels.
+           */
+          function extractValueFromBlock(block, label, stopLabels = []) {
+              if (!block) return null;
 
-            // The very next label after Bestemming must be Name:
-            const nextAfterBestemming = findNextLabel(nextAfterReiziger.end);
-            if (!nextAfterBestemming) break;
+              const stops = stopLabels
+                  .filter(Boolean)
+                  .map(escapeRegex)
+                  .join("|");
 
-            if (nextAfterBestemming.label !== "Name:") {
-                // Wrong order -> ignore this block
-                cursor = nextAfterReiziger.index + 1;
-                continue;
-            }
+              const pattern = stops
+                  ? new RegExp(
+                      `${escapeRegex(label)}\\s*:\\s*([\\s\\S]*?)(?=\\s+(?:${stops})\\s*:|$)`,
+                      "i"
+                    )
+                  : new RegExp(
+                      `${escapeRegex(label)}\\s*:\\s*([\\s\\S]*?)$`,
+                      "i"
+                    );
 
-            // If we reached here, the order is strictly correct.
-            // Extract the three values exactly between the labels.
-            const description = normalized.slice(desc.end, nextAfterDesc.index).trim() || "Not Found";
-            const individual  = normalized.slice(nextAfterDesc.end, nextAfterReiziger.index).trim() || "Not Found";
-            const destination = normalized.slice(nextAfterReiziger.end, nextAfterBestemming.index).trim() || "Not Found";
+              const match = block.match(pattern);
+              const value = match ? cleanTravelValue(match[1]) : null;
 
-            results.push({
-                Description: description,
-                Individual: individual,
-                Destination: destination
-            });
+              return value || null;
+          }
 
-            // Continue scanning right after the Name: label of this completed block
-            cursor = nextAfterBestemming.end;
-        }
+          /**
+           * Optional extraction from existing description text.
+           * Keeps original Description unchanged, only adds TripDate as a separate property.
+           *
+           * Supports examples like:
+           *   Van 2026-06-18 Naar 2026-06-18
+           */
+          function extractTripDateFromDescription(description) {
+              if (!description) return null;
 
-        return results;
-    }
+              const dateMatch = description.match(
+                  /\bVan\s+(\d{4}-\d{2}-\d{2})\s+Naar\s+(\d{4}-\d{2}-\d{2})/i
+              );
+
+              if (!dateMatch) return null;
+
+              const fromDate = dateMatch[1];
+              const toDate = dateMatch[2];
+
+              return fromDate === toDate ? fromDate : `${fromDate} → ${toDate}`;
+          }
+
+          // ------------------------------------------------------------
+          // NEW: Secondary block extraction
+          // ------------------------------------------------------------
+          const secondDescriptionBlock = getSecondDescriptionBlock(normalized);
+
+          let tripPurpose = extractValueFromBlock(
+              secondDescriptionBlock,
+              "Trip Purpose",
+              ["Project", "Name", "Payment ID", "Method", "VAT Summary", "Customer"]
+          );
+
+          let project = extractValueFromBlock(
+              secondDescriptionBlock,
+              "Project",
+              ["Name", "Payment ID", "Method", "VAT Summary", "Customer"]
+          );
+
+          /*
+          * BTS sample fallback:
+          *   Trip Purpose: Trip project SUNSTAR
+          *
+          * If no explicit "Project:" label exists, split "... project XYZ"
+          * into:
+          *   TripPurpose = "Trip"
+          *   Project     = "SUNSTAR"
+          *
+          * This fallback is intentionally conservative and only runs when:
+          *   - Project was not explicitly found
+          *   - Trip Purpose contains the word "project"
+          */
+          if (!project && tripPurpose) {
+              const embeddedProjectMatch = tripPurpose.match(/^(.+?)\s+project\s+(.+)$/i);
+
+              if (embeddedProjectMatch) {
+                  tripPurpose = cleanTravelValue(embeddedProjectMatch[1]);
+                  project = cleanTravelValue(embeddedProjectMatch[2]);
+              }
+          }
+
+          // ------------------------------------------------------------
+          // Existing primary-block extraction logic - preserved
+          // ------------------------------------------------------------
+
+          // We scan for label boundaries, enforcing exact order:
+          // Description/Omschrijving -> Reiziger -> Bestemming -> Name
+          const LABELS_RE = /(Description:|Omschrijving:|Reiziger:|Bestemming:|Name:)/g;
+
+          function findNextLabel(startIdx) {
+              LABELS_RE.lastIndex = startIdx;
+              const m = LABELS_RE.exec(normalized);
+
+              if (!m) return null;
+
+              return {
+                  label: m[1],
+                  index: m.index,
+                  end: m.index + m[0].length
+              };
+          }
+
+          const results = [];
+          let cursor = 0;
+
+          while (true) {
+              const desc = findNextLabel(cursor);
+              if (!desc) break;
+
+              // Only start a primary travel block at Description or Omschrijving
+              if (desc.label !== "Description:" && desc.label !== "Omschrijving:") {
+                  cursor = desc.end;
+                  continue;
+              }
+
+              // The next label must be Reiziger:
+              const nextAfterDesc = findNextLabel(desc.end);
+              if (!nextAfterDesc) break;
+
+              if (nextAfterDesc.label !== "Reiziger:") {
+                  // Example: second Description followed by Trip Purpose / Name
+                  // This is not a primary traveler block, so skip safely.
+                  cursor = desc.index + 1;
+                  continue;
+              }
+
+              // The next label after Reiziger must be Bestemming:
+              const nextAfterReiziger = findNextLabel(nextAfterDesc.end);
+              if (!nextAfterReiziger) break;
+
+              if (nextAfterReiziger.label !== "Bestemming:") {
+                  cursor = nextAfterDesc.index + 1;
+                  continue;
+              }
+
+              // The next label after Bestemming must be Name:
+              const nextAfterBestemming = findNextLabel(nextAfterReiziger.end);
+              if (!nextAfterBestemming) break;
+
+              if (nextAfterBestemming.label !== "Name:") {
+                  cursor = nextAfterReiziger.index + 1;
+                  continue;
+              }
+
+              // Extract original fields exactly between labels
+              const description = cleanTravelValue(
+                  normalized.slice(desc.end, nextAfterDesc.index)
+              ) || "Not Found";
+
+              const individual = cleanTravelValue(
+                  normalized.slice(nextAfterDesc.end, nextAfterReiziger.index)
+              ) || "Not Found";
+
+              const destination = cleanTravelValue(
+                  normalized.slice(nextAfterReiziger.end, nextAfterBestemming.index)
+              ) || "Not Found";
+
+              results.push({
+                  Description: description,
+                  Individual: individual,
+                  Destination: destination,
+
+                  // Existing-compatible optional addition
+                  TripDate: extractTripDateFromDescription(description),
+
+                  // NEW fields from second Description block
+                  TripPurpose: tripPurpose || null,
+                  Project: project || null
+              });
+
+              // Continue scanning after Name:
+              cursor = nextAfterBestemming.end;
+          }
+
+          return results;
+      }
 
     
     // ------------------------------------------------------------
@@ -1672,9 +1830,7 @@ const DDMMYYYY = String.raw`
       
           // ------------------------------------------------------------
           // Split multiple individuals listed on one invoice line
-          // Example:
-          // "ZDAN PAULA Mrs, SOKOL VOLODYMYR Mr, DRAA AMIRA Ms"
-          // → ["ZDAN PAULA Mrs", "SOKOL VOLODYMYR Mr", "DRAA AMIRA Ms"]
+         
           // ------------------------------------------------------------
           function splitIndividuals(individualRaw) {
               if (!individualRaw) return [];
@@ -1850,7 +2006,7 @@ const DDMMYYYY = String.raw`
 
         if (company) {
 
-        output += `✅ Company detected: <strong>${company.CompanyName}</strong>\n`;
+        output += `✅ Company detected: <strong>${company.CompanyName} | ${company.CompanyOfficialName}</strong>\n`;
 
         if (companyMatchMethod === "NAME") {
 
@@ -2324,9 +2480,29 @@ if (supplierTypeRaw.endsWith("NPO")) {
             const travelBlocks = extractTravelNPOData(text, supplierTypeRaw);
 
             if (travelBlocks && travelBlocks.length > 0) {
-                output += `\n✈️ **Validated Travel Information:**\n`;
+                output += `\n✈️ <strong>Validated Travel Information:</strong>\n`;
+
                 travelBlocks.forEach((block, i) => {
-                    output += `  • **Traveler ${i + 1}:** (${block.Description}) | **Individual**${block.Individual} | **To:** ${block.Destination} \n`;
+                    const tripDateHtml = block.TripDate
+                        ? ` | <strong>Trip date:</strong> ${block.TripDate}`
+                        : "";
+
+                    const tripPurposeHtml = block.TripPurpose
+                        ? ` | <strong>Trip Purpose:</strong> ${block.TripPurpose}`
+                        : "";
+
+                    const projectHtml = block.Project
+                        ? ` | <strong>Project:</strong> ${block.Project}`
+                        : "";
+
+                    output +=
+                        `  • <strong>Traveler ${i + 1}:</strong> ` +
+                        `(${block.Description}) ` +
+                        `| <strong>Individual:</strong> ${block.Individual} ` +
+                        `| <strong>To:</strong> ${block.Destination}` +
+                        `${tripDateHtml}` +
+                        `${tripPurposeHtml}` +
+                        `${projectHtml}\n`;
                 });
             }
         }
@@ -2354,7 +2530,7 @@ if (supplierTypeRaw.endsWith("NPO")) {
                         <tbody>
                 `;
 
-                
+                   
               
 
 travelBlocks.forEach(block => {
