@@ -651,12 +651,91 @@ async function convertAndProcessBase64(base64String) {
       return text.replace(/\s+/g, " ").trim();
     }
 
-    function detectVATs(text, Company) {
-      const re = /[A-Z]{0,2}\d{8,12}/g;
-      const matches = text.match(re) || [];
-      const unique = [...new Set(matches)];
-      const ourVATs = Company.map(c => normalizeVAT(c.CompanyBTW));
-      return unique.filter(v => !ourVATs.includes(normalizeVAT(v)));
+    /**
+     * Extract CUSTOMER VAT from the SECOND "Party Identification:".
+     *
+     * Supports:
+     *   Party Identification: BE0430119477
+     *   Party Identification: 0430119477
+     *   Party Identification: NL123456789B01
+     */
+    function extractPartyIdentificationVAT(text) {
+
+        if (!text || typeof text !== "string") {
+            return null;
+        }
+
+        const matches = [];
+
+        const regex =
+            /Party\s*Identification\s*:\s*([A-Z]{0,2}\d{8,14}(?:[A-Z0-9]{0,4})?)/gi;
+
+        let match;
+
+        while ((match = regex.exec(text)) !== null) {
+            matches.push(match[1].trim());
+        }
+
+        // First = supplier
+        // Second = customer/company
+        return matches.length >= 2
+            ? matches[1]
+            : null;
+    }
+
+    /**
+     * Validate VAT extracted from invoice
+     * against Company.CompanyBTW.
+     */
+    function validateCompanyVAT(invoiceText, company) {
+
+        if (!company?.CompanyBTW) {
+            return {
+                valid: false,
+                status: "MISSING_COMPANY_VAT",
+                message: "Company VAT is missing in database."
+            };
+        }
+
+        const extractedVAT = extractPartyIdentificationVAT(invoiceText);
+
+        if (!extractedVAT) {
+            return {
+                valid: false,
+                status: "VAT_NOT_FOUND",
+                message: 'No VAT found after "Party Identification:".'
+            };
+        }
+
+        const invoiceVAT = normalizeVAT(extractedVAT);
+        const companyVAT = normalizeVAT(company.CompanyBTW);
+
+        if (!invoiceVAT) {
+            return {
+                valid: false,
+                status: "EMPTY_VAT",
+                message: 'VAT value after "Party Identification:" could not be parsed.'
+            };
+        }
+
+        if (invoiceVAT !== companyVAT) {
+            return {
+                valid: false,
+                status: "VAT_MISMATCH",
+                extractedVAT,
+                expectedVAT: company.CompanyBTW,
+                message:
+                    `VAT mismatch. Invoice VAT (${extractedVAT}) ` +
+                    `does not match Company.CompanyBTW (${company.CompanyBTW}).`
+            };
+        }
+
+        return {
+            valid: true,
+            status: "VAT_MATCH",
+            extractedVAT,
+            expectedVAT: company.CompanyBTW
+        };
     }
 
     /**
@@ -2030,6 +2109,42 @@ const DDMMYYYY = String.raw`
 
         output += `⚠️ <strong>No company detected.</strong>\n`;
 
+    }
+    // --------------------------------------------------
+    // STRICT VAT VALIDATION
+    // --------------------------------------------------
+
+    const vatValidation = validateCompanyVAT(text, company);
+
+    if (vatValidation.valid) {
+
+        output += `
+    ✅ Recipient VAT validated:
+    <strong>${vatValidation.extractedVAT}</strong>
+    matches Company.CompanyBTW
+    (<strong>${company.CompanyBTW}</strong>)
+    \n`;
+
+    } else {
+
+        output += `
+    <div style="background:red;color:white;padding:8px;font-weight:bold;">
+    ⚠️ COMPANY VAT VALIDATION FAILED
+    </div>
+    `;
+
+        output += `${vatValidation.message}\n`;
+
+        // Optional diagnostic output
+        if (vatValidation.extractedVAT) {
+            output += `
+    📄 Invoice VAT:
+    <strong>${vatValidation.extractedVAT}</strong>\n`;
+        }
+
+        output += `
+    🏦 Expected VAT:
+    <strong>${company.CompanyBTW}</strong>\n`;
     }
             
 
