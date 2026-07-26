@@ -204,7 +204,7 @@
 
       setLoading(true);
       try {
-        const res = await fetch("/ai/validate", {
+        const res = await fetch("http://127.0.0.1:5501/ai/validate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mode: "validate_invoice", context: ctx })
@@ -980,6 +980,9 @@ async function convertAndProcessBase64(base64String) {
         outputSegments.push(`${lineLabel} - ${seg}`);
       });
 
+      // Cache the raw segment strings so the AI validation context can
+      // reference what the app already computed deterministically.
+      window.__lastComputedSegments = outputSegments.slice();
 
       // Subtle UI + console note when approver missing
       if (!approver) {
@@ -2799,6 +2802,7 @@ travelBlocks.forEach(block => {
           window.__lastSupplier = supplier || null;
           window.__lastCompany  = company || null;
           window.__lastApprover = approver || null;
+          window.__lastPdfText  = text || null;
 
           // Build a compact invoice object:
           window.__lastInvoice = {
@@ -2809,6 +2813,7 @@ travelBlocks.forEach(block => {
             currency: currency || null,
             reverseChargeNote: reverseChargeMessage || null
           };
+          
 
           // Collect the matched PO rows you rendered (if you have them):
           const collected = [];
@@ -2857,6 +2862,8 @@ travelBlocks.forEach(block => {
         const approver = window.__lastApprover || null;
         const poRows   = window.__lastPoRows   || [];
         const invoice  = window.__lastInvoice  || null;
+        const pdfText  = window.__lastPdfText  || null;
+        const existingComputedSegment = window.__lastComputedSegments || null;
 
         if (!supplier && !company && !invoice) return null;
 
@@ -2877,7 +2884,9 @@ travelBlocks.forEach(block => {
             predefinedSegments: approver.Segments || null
           } : null,
           invoice: invoice || null,
-          poCandidates: poRows
+          poCandidates: poRows,
+          pdfText: pdfText,
+          existingComputedSegment: existingComputedSegment
         };
       } catch (_) {
         return null;

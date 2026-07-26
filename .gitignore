@@ -52,7 +52,7 @@ git.txt
 # OPTIONAL IDE folders
 ############################################
 .vscode/
-
+.env
 
 ############################################
 # LOCAL DATA (your Templates tables)

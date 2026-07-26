@@ -1,15 +1,17 @@
 {
-  "name": "ap-ai-backend",
+  "name": "ap-validation-backend",
   "version": "1.0.0",
-  "main": "server.js",
-  "type": "module",
+  "description": "Local backend for the AP Invoice Validation Assistant. Handles OCR and AI validation calls.",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
-    "@tensorflow/tfjs-node": "^4.22.0",
-    "body-parser": "^1.20.2",
-    "cors": "^2.8.6",
-    "express": "^4.22.1",
-    "pdf-lib": "^1.17.1",
-    "pdf-parse": "^2.4.5",
-    "tesseract.js": "^7.0.0"
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
   }
 }

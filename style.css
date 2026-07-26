@@ -84,7 +84,7 @@
         overflow: hidden;
         display: grid;
         grid-template-rows: auto 1fr auto;
-        height: 520px;
+        height: 760px;
         box-shadow: 0 10px 30px rgba(0,0,0,.25);
       }
 
