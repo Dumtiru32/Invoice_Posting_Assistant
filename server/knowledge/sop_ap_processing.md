@@ -22,6 +22,7 @@ For all supplier types requiring a PO:
 
 - Locate the PO number on the invoice and verify it matches a valid, active PO in Oracle.
 - PO status must **not** be Canceled, Closed, Rejected, or Pending Approval.
+- PO status 'CLOSED FOR RECEIVING or 'OPEN' is valid to be processing.
 - Supplier name on the PO must match the supplier name on the invoice.
 - Go to Lines → Match invoice Lines → Remove all wings → insert the PO number → Search.
 - Select the lines that match the PDF.

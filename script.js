@@ -2392,6 +2392,7 @@ if (supplierTypeRaw.endsWith("NPO")) {
                     <th>PO Total Amount</th>
                     <th>Supplier</th>
                     <th>Distribution Details</th>
+                    <th>PROJECT</th>
                     <th>Customer</th>
                     <th>Pass On Customer</th>
                     <th>Cost Center</th>
@@ -2490,6 +2491,7 @@ if (supplierTypeRaw.endsWith("NPO")) {
                     <td>${match["PO Total Amount"]}</td>
                     <td style="${supplierStyle}">${match["Supplier"]}</td>
                     <td>${match["DistributionDetails"]}</td>
+                    <td>${match["PROJECT"]}</td>
                     <td>${match["Customer"]}</td>
                     <td style="${passToStyle}">${match["Pass On Customer"]}</td>
                     <td>${match["Cost Center"]}</td>
@@ -2509,6 +2511,7 @@ if (supplierTypeRaw.endsWith("NPO")) {
                     <td>N/A</td>
                     <td>N/A</td>
                     <td>Not Found</td>
+                    <td>N/A</td>
                     <td>N/A</td>
                     <td>N/A</td>
                     <td>N/A</td>
@@ -2767,6 +2770,7 @@ travelBlocks.forEach(block => {
                           supplier: r["Supplier"],
                           total: r["PO Total Amount"],
                           buyer: r["Buyer"],
+                          project: r["PROJECT"],
                           customer: r["Customer"],
                           passOnCustomer: r["Pass On Customer"],
                           headerDesc: r["PO Header Description"],
@@ -2827,6 +2831,7 @@ travelBlocks.forEach(block => {
                   supplier: r["Supplier"],
                   total: r["PO Total Amount"],
                   buyer: r["Buyer"],
+                  project: r["PROJECT"],
                   customer: r["Customer"],
                   passOnCustomer: r["Pass On Customer"],
                   headerDesc: r["PO Header Description"],
