@@ -1020,7 +1020,7 @@ async function convertAndProcessBase64(base64String) {
 
     // Build HTML table
     let html = `
-      <table border="1" cellpadding="5" cellspacing="0"
+      <table id="segmentsLabelTable" border="1" cellpadding="5" cellspacing="0"
             style="border-collapse:collapse; margin-top:10px; width:${tableWidth}px; table-layout:auto;">
         <thead style="background:#eef;">
           <tr>
@@ -2379,7 +2379,7 @@ if (supplierTypeRaw.endsWith("NPO")) {
         const poNumbers = detectPoNumbers(text, company);
         
         let tableHTML = `
-        <table border="1" style="border-collapse: collapse; width: 100%;">
+        <table id="poItemsTable" border="1" style="border-collapse: collapse; width: 100%;">
             <thead>
                 <tr style="background:#f2f2f2;">
                     <th>Business Unit</th>
@@ -2846,6 +2846,10 @@ travelBlocks.forEach(block => {
           }
           window.__lastPoRows = collected;
 
+          // Cross-reference "Item Description" words against the Label and
+          // Description columns so matching keywords are highlighted for the user.
+          highlightCrossDescriptionMatches();
+
 
       } catch (err) {
         res.innerHTML = "❌ Error reading PDF: " + err.message;
@@ -2922,12 +2926,15 @@ travelBlocks.forEach(block => {
     // Build result table
       let html = `
         <h3>📦 Supplier Lines from History</h3>
-        <table border="1" cellpadding="5" cellspacing="0" style="border-collapse:collapse;margin-top:10px;">
+        <table id="supplierHistoryTable" border="1" cellpadding="5" cellspacing="0" style="border-collapse:collapse;margin-top:10px;">
+          <thead>
           <tr style="background:#eef;">
             ${Object.keys(matchingLines[0])
               .map((key) => `<th>${key}</th>`)
               .join("")}
-          </tr>`;
+          </tr>
+          </thead>
+          <tbody>`;
 
       for (const row of matchingLines) {
         html += `<tr>${Object.values(row)
@@ -2935,13 +2942,467 @@ travelBlocks.forEach(block => {
           .join("")}</tr>`;
       }
 
-      html += "</table>";
+      html += "</tbody></table>";
       container.innerHTML += html;
+
+      // Enable Excel-style per-column filtering/sorting on the freshly rendered table
+      initExcelFilters(document.getElementById("supplierHistoryTable"));
     } catch (err) {
       console.error("Error loading supplier segment data:", err);
       document.getElementById("otherResult").innerHTML += `<p>❌ Error loading supplier segment data: ${err.message}</p>`;
     }
   }
+  // ------------------------------------------------------------
+  // Excel-like column filter/sort for any <table> with a
+  // <thead>/<tbody> structure (used by "Supplier Lines from History").
+  // ------------------------------------------------------------
+
+  function injectExcelFilterStyles() {
+    if (document.getElementById("excel-filter-styles")) return;
+    const style = document.createElement("style");
+    style.id = "excel-filter-styles";
+    style.textContent = `
+      .excel-filter-btn {
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        margin-left: 6px;
+        font-size: 11px;
+        padding: 0 3px;
+        border-radius: 3px;
+        vertical-align: middle;
+      }
+      .excel-filter-btn:hover { background: rgba(0,0,0,0.08); }
+      .excel-filter-btn.active { color: #0a66ff; font-weight: bold; }
+      .excel-filter-dropdown {
+        position: absolute;
+        z-index: 10000;
+        background: #fff;
+        border: 1px solid #c7d0da;
+        border-radius: 6px;
+        box-shadow: 0 8px 24px rgba(0,0,0,.18);
+        padding: 8px;
+        width: 220px;
+        font-size: 13px;
+        font-family: Arial, sans-serif;
+        color: #111;
+      }
+      .excel-filter-search {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 4px 6px;
+        margin-bottom: 6px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      .excel-filter-sort {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 6px;
+      }
+      .excel-filter-sort button {
+        flex: 1;
+        font-size: 11px;
+        padding: 3px 4px;
+        border: 1px solid #ddd;
+        background: #f7f7f7;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .excel-filter-sort button:hover { background: #eef; }
+      .excel-filter-list {
+        max-height: 180px;
+        overflow-y: auto;
+        border-top: 1px solid #eee;
+        border-bottom: 1px solid #eee;
+        padding: 4px 0;
+        margin-bottom: 6px;
+      }
+      .excel-filter-item {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 2px;
+        cursor: pointer;
+      }
+      .excel-filter-item:hover { background: #f5f8ff; }
+      .excel-filter-selectall {
+        font-weight: 600;
+        border-bottom: 1px solid #eee;
+        margin-bottom: 4px;
+        padding-bottom: 4px;
+      }
+      .excel-filter-footer {
+        display: flex;
+        gap: 6px;
+      }
+      .excel-filter-footer button {
+        flex: 1;
+        padding: 4px 6px;
+        border-radius: 4px;
+        border: 1px solid #ccc;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .excel-filter-ok { background: #0a66ff; color: #fff; border-color: #0a66ff; }
+      .excel-filter-ok:hover { filter: brightness(1.05); }
+      .excel-filter-clear:hover { background: #f2f2f2; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function closeAllExcelFilterDropdowns() {
+    document.querySelectorAll(".excel-filter-dropdown").forEach((d) => d.remove());
+  }
+
+  function initExcelFilters(table) {
+    if (!table) return;
+    injectExcelFilterStyles();
+
+    const thead = table.tHead;
+    const tbody = table.tBodies[0];
+    if (!thead || !tbody) return;
+
+    const headerCells = Array.from(thead.rows[0].cells);
+    // null = no restriction on this column; otherwise a Set of allowed values
+    const activeFilters = headerCells.map(() => null);
+
+    function getBodyRows() {
+      return Array.from(tbody.rows);
+    }
+
+    function getColumnValues(colIndex) {
+      const set = new Set();
+      getBodyRows().forEach((row) => {
+        set.add((row.cells[colIndex]?.textContent ?? "").trim());
+      });
+      return Array.from(set).sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+      );
+    }
+
+    function applyFilters() {
+      getBodyRows().forEach((row) => {
+        const visible = headerCells.every((_, colIndex) => {
+          const filterSet = activeFilters[colIndex];
+          if (!filterSet) return true;
+          const cellVal = (row.cells[colIndex]?.textContent ?? "").trim();
+          return filterSet.has(cellVal);
+        });
+        row.style.display = visible ? "" : "none";
+      });
+    }
+
+    function updateHeaderIcon(colIndex) {
+      const btn = headerCells[colIndex].querySelector(".excel-filter-btn");
+      if (btn) btn.classList.toggle("active", !!activeFilters[colIndex]);
+    }
+
+    function buildDropdown(colIndex, anchorBtn) {
+      closeAllExcelFilterDropdowns();
+
+      const values = getColumnValues(colIndex);
+      const currentFilter = activeFilters[colIndex];
+
+      const dropdown = document.createElement("div");
+      dropdown.className = "excel-filter-dropdown";
+
+      const searchInput = document.createElement("input");
+      searchInput.type = "text";
+      searchInput.placeholder = "Search…";
+      searchInput.className = "excel-filter-search";
+      dropdown.appendChild(searchInput);
+
+      const sortDiv = document.createElement("div");
+      sortDiv.className = "excel-filter-sort";
+      sortDiv.innerHTML = `
+        <button type="button" data-dir="asc">⬆ Sort A–Z</button>
+        <button type="button" data-dir="desc">⬇ Sort Z–A</button>
+      `;
+      dropdown.appendChild(sortDiv);
+
+      const listWrap = document.createElement("div");
+      listWrap.className = "excel-filter-list";
+
+      const selectAllLabel = document.createElement("label");
+      selectAllLabel.className = "excel-filter-item excel-filter-selectall";
+      const selectAllCb = document.createElement("input");
+      selectAllCb.type = "checkbox";
+      selectAllCb.checked = !currentFilter;
+      selectAllLabel.appendChild(selectAllCb);
+      selectAllLabel.appendChild(document.createTextNode(" (Select All)"));
+      listWrap.appendChild(selectAllLabel);
+
+      const checkboxes = [];
+      values.forEach((val) => {
+        const label = document.createElement("label");
+        label.className = "excel-filter-item";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = val;
+        cb.checked = currentFilter ? currentFilter.has(val) : true;
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(val === "" ? "(Blanks)" : val));
+        listWrap.appendChild(label);
+        checkboxes.push({ cb, label, val });
+      });
+      dropdown.appendChild(listWrap);
+
+      const footer = document.createElement("div");
+      footer.className = "excel-filter-footer";
+      const clearBtn = document.createElement("button");
+      clearBtn.type = "button";
+      clearBtn.textContent = "Clear";
+      clearBtn.className = "excel-filter-clear";
+      const okBtn = document.createElement("button");
+      okBtn.type = "button";
+      okBtn.textContent = "OK";
+      okBtn.className = "excel-filter-ok";
+      footer.appendChild(clearBtn);
+      footer.appendChild(okBtn);
+      dropdown.appendChild(footer);
+
+      searchInput.addEventListener("input", () => {
+        const q = searchInput.value.toLowerCase();
+        checkboxes.forEach(({ label, val }) => {
+          label.style.display = val.toLowerCase().includes(q) ? "" : "none";
+        });
+      });
+
+      selectAllCb.addEventListener("change", () => {
+        checkboxes.forEach(({ cb, label }) => {
+          if (label.style.display !== "none") cb.checked = selectAllCb.checked;
+        });
+      });
+
+      sortDiv.querySelectorAll("button").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const dir = btn.dataset.dir;
+          const rowsArr = getBodyRows();
+          rowsArr.sort((a, b) => {
+            const av = (a.cells[colIndex]?.textContent ?? "").trim();
+            const bv = (b.cells[colIndex]?.textContent ?? "").trim();
+            return dir === "asc"
+              ? av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" })
+              : bv.localeCompare(av, undefined, { numeric: true, sensitivity: "base" });
+          });
+          rowsArr.forEach((r) => tbody.appendChild(r));
+          closeAllExcelFilterDropdowns();
+        });
+      });
+
+      clearBtn.addEventListener("click", () => {
+        activeFilters[colIndex] = null;
+        updateHeaderIcon(colIndex);
+        applyFilters();
+        closeAllExcelFilterDropdowns();
+      });
+
+      okBtn.addEventListener("click", () => {
+        const checked = checkboxes.filter((c) => c.cb.checked).map((c) => c.val);
+        activeFilters[colIndex] = checked.length === values.length ? null : new Set(checked);
+        updateHeaderIcon(colIndex);
+        applyFilters();
+        closeAllExcelFilterDropdowns();
+      });
+
+      dropdown.addEventListener("click", (e) => e.stopPropagation());
+      document.body.appendChild(dropdown);
+
+      const rect = anchorBtn.getBoundingClientRect();
+      dropdown.style.top = `${window.scrollY + rect.bottom + 2}px`;
+      dropdown.style.left = `${window.scrollX + rect.left}px`;
+    }
+
+    headerCells.forEach((th, colIndex) => {
+      const label = th.textContent;
+      th.innerHTML = "";
+      th.style.whiteSpace = "nowrap";
+
+      const span = document.createElement("span");
+      span.textContent = label;
+      th.appendChild(span);
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "excel-filter-btn";
+      btn.textContent = "▾";
+      btn.title = "Filter / Sort";
+      th.appendChild(btn);
+
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        buildDropdown(colIndex, btn);
+      });
+    });
+
+    document.addEventListener("click", closeAllExcelFilterDropdowns);
+  }
+
+  // ------------------------------------------------------------
+  // Cross-reference "Item Description" (PO table) words against the
+  // "Label" column (Posting Segments table) and the "Description"
+  // column (Supplier Lines from History table). Any word appearing
+  // in all three gets highlighted everywhere it shows up, so users
+  // can spot the right line/segment/history entry at a glance.
+  // ------------------------------------------------------------
+
+  // Tune these as needed: words shorter than MIN_WORD_LEN, or in the
+  // stoplist, are ignored so common filler words don't create noise.
+  const CROSS_MATCH_MIN_WORD_LEN = 3;
+  const CROSS_MATCH_STOPWORDS = new Set([
+    "the", "and", "for", "of", "to", "on", "at", "with", "per", "een", "het",
+    "van", "voor", "met", "aan", "op", "in", "of", "is", "en", "de", "des",
+    "la", "le", "du", "un", "une", "et", "pour", "avec"
+  ]);
+
+  function injectCrossMatchStyles() {
+    if (document.getElementById("cross-match-styles")) return;
+    const style = document.createElement("style");
+    style.id = "cross-match-styles";
+    style.textContent = `
+      .cross-match-highlight {
+        background: #90caf9;
+        font-weight: 700;
+        padding: 0 2px;
+        border-radius: 2px;
+      }
+      #crossMatchSummary {
+        margin-top: 10px;
+        padding: 8px 10px;
+        border: 1px solid #ffe082;
+        background: #fffbe6;
+        border-radius: 6px;
+        font-size: 13px;
+      }
+      #crossMatchSummary strong { color: #7a5c00; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function tokenizeToWordSet(text) {
+    const matches = (text || "").toString().toLowerCase().match(/[a-z0-9]+/gi) || [];
+    return new Set(
+      matches.filter((w) => w.length >= CROSS_MATCH_MIN_WORD_LEN && !CROSS_MATCH_STOPWORDS.has(w))
+    );
+  }
+
+  function getColumnTextByHeader(table, headerText) {
+    if (!table || !table.tHead || !table.tBodies[0]) return { cells: [], headerFound: null, availableHeaders: [] };
+    const headerCells = Array.from(table.tHead.rows[0].cells);
+    const headers = headerCells.map((th) => th.textContent.trim());
+    const target = headerText.trim().toLowerCase();
+
+    // 1) exact match (case-insensitive)
+    let colIndex = headers.findIndex((h) => h.toLowerCase() === target);
+    // 2) fallback: fuzzy/partial match, in case the real column is named slightly differently
+    if (colIndex === -1) {
+      colIndex = headers.findIndex(
+        (h) => h.toLowerCase().includes(target) || target.includes(h.toLowerCase())
+      );
+    }
+    if (colIndex === -1) return { cells: [], headerFound: null, availableHeaders: headers };
+
+    const cells = Array.from(table.tBodies[0].rows).map((row) => row.cells[colIndex]);
+    return { cells, headerFound: headers[colIndex], availableHeaders: headers };
+  }
+
+  function highlightWordsInCell(cell, wordsToHighlight) {
+    if (!cell || !wordsToHighlight.size) return;
+    const original = cell.textContent;
+    if (!original) return;
+    // Substring match (no \b boundaries) so e.g. "pallet" highlights inside "palletten" too.
+    const pattern = new RegExp(
+      `(${Array.from(wordsToHighlight).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
+      "gi"
+    );
+    cell.innerHTML = original.replace(pattern, '<span class="cross-match-highlight">$1</span>');
+  }
+
+  function renderCrossMatchSummary(html) {
+    const container = document.getElementById("otherResult");
+    if (!container) return;
+    const summary = document.createElement("div");
+    summary.id = "crossMatchSummary";
+    summary.innerHTML = html;
+    container.appendChild(summary);
+  }
+
+  function highlightCrossDescriptionMatches() {
+    injectCrossMatchStyles();
+
+    // Remove any previous summary before recomputing
+    const oldSummary = document.getElementById("crossMatchSummary");
+    if (oldSummary) oldSummary.remove();
+
+    const poTable = document.getElementById("poItemsTable");
+    const labelTable = document.getElementById("segmentsLabelTable");
+    const historyTable = document.getElementById("supplierHistoryTable");
+
+    const missingTables = [];
+    if (!poTable) missingTables.push("PO Item Details table");
+    if (!labelTable) missingTables.push("Posting Segments (Label) table");
+    if (!historyTable) missingTables.push("Supplier Lines from History table");
+
+    if (missingTables.length) {
+      // Give visible feedback instead of silently doing nothing — this usually
+      // means this invoice type has no PO table, no matched manual segments,
+      // or no supplier history lines, so there's nothing to cross-reference yet.
+      renderCrossMatchSummary(
+        `ℹ️ Keyword cross-check skipped — missing: <strong>${missingTables.join(", ")}</strong>.`
+      );
+      return;
+    }
+
+    const itemDesc = getColumnTextByHeader(poTable, "Item Description");
+    const label = getColumnTextByHeader(labelTable, "Label");
+    const description = getColumnTextByHeader(historyTable, "Description");
+
+    console.log("🔗 Cross-match columns:", {
+      itemDescription: itemDesc.headerFound,
+      label: label.headerFound,
+      description: description.headerFound,
+      historyTableHeaders: description.availableHeaders
+    });
+
+    const missingColumns = [];
+    if (!itemDesc.cells.length) missingColumns.push(`"Item Description" (PO table headers: ${itemDesc.availableHeaders.join(", ")})`);
+    if (!label.cells.length) missingColumns.push(`"Label" (Segments table headers: ${label.availableHeaders.join(", ")})`);
+    if (!description.cells.length) missingColumns.push(`"Description" (History table headers: ${description.availableHeaders.join(", ")})`);
+
+    if (missingColumns.length) {
+      renderCrossMatchSummary(
+        `ℹ️ Keyword cross-check skipped — couldn't find column: ${missingColumns.join(" | ")}.`
+      );
+      return;
+    }
+
+    const itemDescWords = new Set();
+    itemDesc.cells.forEach((cell) => tokenizeToWordSet(cell.textContent).forEach((w) => itemDescWords.add(w)));
+
+    // Substring matching: a word from Item Description counts as a match if it
+    // appears ANYWHERE inside the Label / Description text — not just as a whole word.
+    const labelFullText = label.cells.map((cell) => cell.textContent.toLowerCase()).join(" \u241f ");
+    const descriptionFullText = description.cells.map((cell) => cell.textContent.toLowerCase()).join(" \u241f ");
+
+    const matchedWords = new Set(
+      [...itemDescWords].filter((w) => labelFullText.includes(w) && descriptionFullText.includes(w))
+    );
+
+    // Highlight the matches everywhere they appear
+    itemDesc.cells.forEach((cell) => highlightWordsInCell(cell, matchedWords));
+    label.cells.forEach((cell) => highlightWordsInCell(cell, matchedWords));
+    description.cells.forEach((cell) => highlightWordsInCell(cell, matchedWords));
+
+    renderCrossMatchSummary(
+      matchedWords.size
+        ? `🔗 <strong>Matching keyword(s)</strong> found in Item Description, Label, and Description: ${Array.from(matchedWords)
+            .map((w) => `<span class="cross-match-highlight">${w}</span>`)
+            .join(", ")}`
+        : `ℹ️ No common keyword found across Item Description, Label, and Description columns.`
+    );
+  }
+
   // Load and Display Approver, Company, Manual, Supplier and Exception Lines from json tables
   async function loadJSONData() {
   try {
