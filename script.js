@@ -789,13 +789,15 @@ async function convertAndProcessBase64(base64String) {
           ? supplierTypeRaw.split(/[;,]/).map(t => t.trim().toLowerCase())
           : [];
 
-      const matchingManuals = Manual.filter(m =>
-        m.ManualEntity === companyId &&
-        types.includes(m.OperationType.toLowerCase().trim())
-      );
-    // Return the array, or null if no matches were found (for cleaner conditional checks later)
+      const matchingManuals = Manual.filter(m => {
+        const opType = (m.OperationType || "").toLowerCase().trim();
+        return m.ManualEntity === companyId &&
+          (opType === "all" || types.includes(opType));
+      });
+
       return matchingManuals.length > 0 ? matchingManuals : null;
     }
+    
 
     function getException(companyId, supplierTypeRaw, supplierVAT) {
 
@@ -2338,6 +2340,59 @@ if (supplierTypeRaw.endsWith("NPO")) {
         const currency = currencyMatch ? currencyMatch[1].toUpperCase() : "Unknown";
         output += `💱 Currency detected: <strong>${currency}</strong>\n`;
 
+        // 🔑 Special Keyword Detection (Manual "All" rows) — checks PDF text + matched PO fields
+          try {
+            const allManualRows = Manual.filter(m => (m.OperationType || "").toString().trim().toLowerCase() === "all");
+            const keywordList = allManualRows
+              .map(m => {
+                const raw = (m["ManualRC/NRC"] || "").toString().trim();
+                const idx = raw.indexOf(":");
+                const keyword = (idx > -1 ? raw.slice(0, idx) : raw).trim();
+                const comment = (idx > -1 ? raw.slice(idx + 1) : "").trim();
+                return { keyword, comment };
+              })
+              .filter(k => k.keyword);
+
+            if (keywordList.length) {
+              const foundKeywords = new Map(); // keyword -> comment
+              const textUpper = text.toUpperCase();
+
+              // 1) Match against full PDF text
+              keywordList.forEach(({ keyword, comment }) => {
+                if (textUpper.includes(keyword.toUpperCase())) foundKeywords.set(keyword, comment);
+              });
+
+              // 2) Match against detected PO rows (Header Description, Distribution Details, Project)
+              const poNumbersForKeywords = detectPoNumbers(text, company);
+              if (poNumbersForKeywords && poNumbersForKeywords.length) {
+                const fieldsToCheck = ["PO Header Description", "DistributionDetails", "PROJECT"];
+                poNumbersForKeywords.forEach(po => {
+                  const rows = PoData.filter(r => String(r["PO Number"]) === String(po));
+                  rows.forEach(row => {
+                    fieldsToCheck.forEach(field => {
+                      const val = (row[field] ?? "").toString().toUpperCase();
+                      if (!val) return;
+                      keywordList.forEach(({ keyword, comment }) => {
+                        if (val.includes(keyword.toUpperCase())) foundKeywords.set(keyword, comment);
+                      });
+                    });
+                  });
+                });
+              }
+
+              if (foundKeywords.size > 0) {
+                const display = [...foundKeywords.entries()]
+                  .map(([kw, c]) => c ? `${kw} (${c})` : kw)
+                  .join(", ");
+                output += `<div style="background-color:red; color:white; font-weight:bold; padding:4px 6px; display:inline-block; margin-top:4px;">
+                            ⚠️ Special keyword(s) detected: ${display}
+                          </div>\n`;
+              }
+            }
+          } catch (e) {
+            console.error("Keyword detection failed:", e);
+          }
+
   // --------------------------------------------------------------------
   // NEW: Exception/Supplier relational check after "Currency detected"
   
@@ -2586,7 +2641,7 @@ if (supplierTypeRaw.endsWith("NPO")) {
         
 
         // STEP 4 — Build Segment
-        const manualArray = company && supplier ? getManual(company.CompanyID, supplier.SupplierType) : null; 
+        const manualArray = company ? getManual(company.CompanyID, supplier?.SupplierType) : null;
         const exceptionArray = company && !approver ? getException(company.CompanyID, supplier.SupplierType, supplierVAT) : null;
         const seg = makeSegments(company, manualArray, exceptionArray, approver, supplierVAT, true,supplier);
         
