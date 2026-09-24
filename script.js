@@ -1937,6 +1937,7 @@ const DDMMYYYY = String.raw`
     let Exception = [];
     let PoData = [];
     let Pres = [];
+    let APAnalysis = [];
 
     (async () => {
       const data = await loadJSONData();
@@ -1947,7 +1948,37 @@ const DDMMYYYY = String.raw`
       Exception = data.Exception;
       PoData = data.PoData;
       Pres = data.Pres;
+      APAnalysis = data.APAnalysis;
     })();
+
+    // ------------------------------------------------------------
+    // Early Initiated Status check
+    // Matches an invoice number against APanalysis_EarlyInitiatedStatusGrouped_qry.json,
+    // restricted to rows whose Business Unit ends with the current CompanyID
+    // (the same invoice number can exist for different business units).
+    // ------------------------------------------------------------
+    function detectEarlyInitiatedInvoice(invoiceNumber, company, apAnalysisArray) {
+      if (!invoiceNumber || !company?.CompanyID || !Array.isArray(apAnalysisArray)) return [];
+
+      const invNorm = String(invoiceNumber).trim().toLowerCase();
+      const compId = company.CompanyID.trim().toUpperCase();
+
+      return apAnalysisArray.filter(row => {
+        const rowInv = String(row["Invoice Number"] || "").trim().toLowerCase();
+        const bu = String(row["Business Unit"] || "").trim().toUpperCase();
+        const buSuffix = bu.slice(-3); // last three letters of Business Unit → CompanyID
+        return rowInv === invNorm && buSuffix === compId;
+      });
+    }
+
+    // Renders the whole matched row as plain text (no highlighting)
+    function renderEarlyInitiatedLine(row) {
+      if (!row) return "";
+      const fields = Object.entries(row)
+        .map(([key, val]) => `${key}: ${val ?? ""}`)
+        .join(" | ");
+      return `⚠️ Invoice already found in Early Initiated Status report → ${fields}`;
+    }
 
     document.getElementById("processBtn").addEventListener("click", async () => {
 
@@ -2304,6 +2335,19 @@ if (supplierTypeRaw.endsWith("NPO")) {
         }
         else {
         output += '⚠️ <strong>The Invoice Number is not detected, check it manually!</strong>\n';
+        }
+
+        // --- Check invoice number against Early Initiated Status report (per CompanyID) ---
+        const finalInvoiceNumber = invoiceNumberPeppol || invoiceNumber || null;
+        if (finalInvoiceNumber && company) {
+          const earlyMatches = detectEarlyInitiatedInvoice(finalInvoiceNumber, company, APAnalysis);
+          if (earlyMatches.length > 0) {
+            earlyMatches.forEach(row => {
+              output += renderEarlyInitiatedLine(row) + "\n";
+            });
+          } else {
+            output += `✅ Invoice Number not found in Early Initiated Status report for ${company.CompanyID}.\n`;
+          }
         }
 
         // --- Reverse charge detection ---
@@ -3468,7 +3512,8 @@ travelBlocks.forEach(block => {
       supplierRes,
       exception,
       poData,
-      pres
+      pres,
+      apAnalysis
     ] = await Promise.all([
       fetch("json/Approver.json"),
       fetch("json/Company.json"),
@@ -3476,7 +3521,8 @@ travelBlocks.forEach(block => {
       fetch("json/Supplier.json"),
       fetch("json/Exception.json"),
       fetch("json/PO_group_qry.json"),
-      fetch("json/PRESfile.json")
+      fetch("json/PRESfile.json"),
+      fetch("json/APanalysis_EarlyInitiatedStatusGrouped_qry.json")
     ]);
 
     const [
@@ -3486,7 +3532,8 @@ travelBlocks.forEach(block => {
       Supplier,
       Exception,
       PoData,
-      Pres
+      Pres,
+      APAnalysis
     ] = await Promise.all([
       approverRes.json(),
       companyRes.json(),
@@ -3494,15 +3541,16 @@ travelBlocks.forEach(block => {
       supplierRes.json(),
       exception.json(),
       poData.json(),
-      pres.json()
+      pres.json(),
+      apAnalysis.json()
     ]);
 
     console.log("✅ All JSON tables loaded successfully");
-    return { Approver, Company, Manual, Supplier, Exception, PoData, Pres };
+    return { Approver, Company, Manual, Supplier, Exception, PoData, Pres, APAnalysis };
 
   } catch (err) {
     console.error("❌ Error loading JSON data:", err);
-    return { Approver: [], Company: [], Manual: [], Supplier: [], Exception: [], PoData: [], Pres:[] };
+    return { Approver: [], Company: [], Manual: [], Supplier: [], Exception: [], PoData: [], Pres:[], APAnalysis: [] };
   }
 }
   
