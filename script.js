@@ -3554,3 +3554,115 @@ travelBlocks.forEach(block => {
   }
 }
   
+// ------------------------------------------------------------
+// Desktop application shell interactions
+// UI-only enhancement: existing invoice logic and DOM hooks remain unchanged.
+// ------------------------------------------------------------
+(function initDesktopShell() {
+  function ready(fn) {
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn);
+    else fn();
+  }
+
+  ready(() => {
+    const shell = document.querySelector(".desktop-shell");
+    const status = document.getElementById("appStatus");
+    const workspaceState = document.getElementById("workspaceState");
+    const clock = document.getElementById("appClock");
+    const fileInput = document.getElementById("pdfFile");
+    const fileName = document.getElementById("selectedFileName");
+    const sidebarFileState = document.getElementById("sidebarFileState");
+
+    const setDesktopStatus = (message) => {
+      if (status) status.textContent = message;
+      if (workspaceState) workspaceState.textContent = message;
+    };
+
+    const closeMenus = () => {
+      document.querySelectorAll(".menu-item.open").forEach((item) => {
+        item.classList.remove("open");
+        item.querySelector(".menu-trigger")?.setAttribute("aria-expanded", "false");
+      });
+    };
+
+    document.querySelectorAll(".menu-trigger").forEach((trigger) => {
+      trigger.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const item = trigger.closest(".menu-item");
+        const opening = !item.classList.contains("open");
+        closeMenus();
+        item.classList.toggle("open", opening);
+        trigger.setAttribute("aria-expanded", String(opening));
+      });
+    });
+
+    document.addEventListener("click", closeMenus);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeMenus();
+    });
+
+    document.querySelectorAll("[data-command]").forEach((control) => {
+      control.addEventListener("click", () => {
+        const command = control.dataset.command;
+        closeMenus();
+
+        if (command === "choose-file") fileInput?.click();
+        if (command === "process-invoice") document.getElementById("processBtn")?.click();
+        if (command === "clear-base64") {
+          const input = document.getElementById("base64Input");
+          if (input) input.value = "";
+          setDesktopStatus("Base64 input cleared");
+        }
+        if (command === "convert-pdf") document.getElementById("convertBtn")?.click();
+        if (command === "run-ocr") document.getElementById("btnOcr")?.click();
+        if (command === "open-ai") {
+          const chat = document.getElementById("ap-ai-chat");
+          if (chat) chat.hidden = false;
+        }
+        if (command === "toggle-sidebar") shell?.classList.toggle("sidebar-collapsed");
+        if (command === "toggle-compact") document.body.classList.toggle("compact-mode");
+        if (command === "show-help") {
+          alert("Select a PDF, choose Process Invoice, and review the validation panels. Tools contains Base64, OCR, and AI actions.");
+        }
+        if (command === "clear-workspace") {
+          ["dbg", "manualSugest", "otherResult"].forEach((id) => {
+            const element = document.getElementById(id);
+            if (element) element.innerHTML = "";
+          });
+          const result = document.getElementById("result");
+          const lines = document.getElementById("lines");
+          if (result) result.textContent = 'Please upload a PDF and click "Process Invoice".';
+          if (lines) lines.textContent = "Lines:";
+          setDesktopStatus("Workspace cleared");
+        }
+      });
+    });
+
+    fileInput?.addEventListener("change", () => {
+      const selected = fileInput.files?.[0];
+      const message = selected ? selected.name : "No invoice selected";
+      if (fileName) fileName.textContent = message;
+      if (sidebarFileState) sidebarFileState.textContent = selected ? `Selected: ${selected.name}` : "Waiting for a PDF file";
+      setDesktopStatus(selected ? "Invoice selected" : "Ready");
+    });
+
+    document.getElementById("processBtn")?.addEventListener("click", () => setDesktopStatus("Processing invoice"));
+
+    document.querySelectorAll("[data-window-action]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const action = button.dataset.windowAction;
+        if (action === "minimize") shell?.classList.toggle("sidebar-collapsed");
+        if (action === "maximize") document.documentElement.requestFullscreen?.().catch(() => {});
+        if (action === "close") setDesktopStatus("Browser tabs cannot be closed by the app");
+      });
+    });
+
+    if (clock) {
+      const updateClock = () => {
+        clock.textContent = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date());
+      };
+      updateClock();
+      setInterval(updateClock, 30000);
+    }
+  });
+})();

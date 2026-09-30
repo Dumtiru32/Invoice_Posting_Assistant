@@ -1,9 +1,9 @@
 <!doctype html>
-
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <title>Invoice Automation – Enhanced Supplier & Client Validation</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Invoice Posting Assistant</title>
   <link rel="icon" type="image/x-icon" href="images/validation-icons-7222228.jpg">
   <link rel="stylesheet" href="style.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
@@ -12,95 +12,172 @@
       "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
   </script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.2/dist/tesseract.min.js"></script>
-
 </head>
 <body>
-  <div class="one-row">
-    <div>
-      <h2 class="two">Invoice Posting Assistant</h2>
-      <div class="two-columns">
-        <input type="file" id="pdfFile" accept="application/pdf"/>
-        <button id="processBtn">Process Invoice</button>
-      </div>
-    </div>
-    <div>
-        <h3>Base64 → PDF Converter</h3>
-      <div class="two-columns">
-        <textarea id="base64Input" placeholder="Paste Base64 PDF data here..."></textarea>
-        <div class="one-column">
-          <button id="convertBtn">Convert to PDF</button>
-          <button id="emtyButton">Empty textarea</button>
-        <div class="two-columns">
-          <button id="btnOcr">Run OCR (server)</button>
-          
-          </div>  
+  <div class="desktop-shell">
+    <header class="desktop-titlebar">
+      <div class="desktop-brand">
+        <span class="desktop-app-icon" aria-hidden="true">IP</span>
+        <div>
+          <h1>Invoice Posting Assistant</h1>
+          <span>Enhanced Supplier &amp; Client Validation</span>
         </div>
+      </div>
+      <div class="desktop-window-controls" aria-label="Window controls">
+        <button type="button" class="window-control" data-window-action="minimize" aria-label="Minimize">−</button>
+        <button type="button" class="window-control" data-window-action="maximize" aria-label="Maximize">□</button>
+        <button type="button" class="window-control window-control-close" data-window-action="close" aria-label="Close">×</button>
+      </div>
+    </header>
+
+    <nav class="desktop-menubar" aria-label="Application menu">
+      <div class="menu-item">
+        <button type="button" class="menu-trigger" aria-expanded="false">File</button>
+        <div class="menu-dropdown" role="menu">
+          <button type="button" role="menuitem" data-command="choose-file">Open invoice...</button>
+          <button type="button" role="menuitem" data-command="process-invoice">Process invoice</button>
+          <button type="button" role="menuitem" data-command="clear-workspace">Clear workspace</button>
+        </div>
+      </div>
+      <div class="menu-item">
+        <button type="button" class="menu-trigger" aria-expanded="false">Edit</button>
+        <div class="menu-dropdown" role="menu">
+          <button type="button" role="menuitem" data-command="clear-base64">Clear Base64 input</button>
+        </div>
+      </div>
+      <div class="menu-item">
+        <button type="button" class="menu-trigger" aria-expanded="false">View</button>
+        <div class="menu-dropdown" role="menu">
+          <button type="button" role="menuitem" data-command="toggle-sidebar">Toggle tools panel</button>
+          <button type="button" role="menuitem" data-command="toggle-compact">Compact mode</button>
+        </div>
+      </div>
+      <div class="menu-item">
+        <button type="button" class="menu-trigger" aria-expanded="false">Tools</button>
+        <div class="menu-dropdown" role="menu">
+          <button type="button" role="menuitem" data-command="convert-pdf">Convert Base64 to PDF</button>
+          <button type="button" role="menuitem" data-command="run-ocr">Run OCR</button>
+          <button type="button" role="menuitem" data-command="open-ai">Open AI Assistant</button>
+        </div>
+      </div>
+      <div class="menu-item">
+        <button type="button" class="menu-trigger" aria-expanded="false">Help</button>
+        <div class="menu-dropdown" role="menu">
+          <button type="button" role="menuitem" data-command="show-help">Quick help</button>
+        </div>
+      </div>
+    </nav>
+
+    <div class="desktop-toolbar" role="toolbar" aria-label="Primary actions">
+      <label class="toolbar-file" for="pdfFile">Select PDF</label>
+      <input type="file" id="pdfFile" accept="application/pdf">
+      <button id="processBtn" class="toolbar-primary" type="button">Process Invoice</button>
+      <span class="toolbar-separator" aria-hidden="true"></span>
+      <button type="button" class="toolbar-action" data-command="clear-workspace">Clear Results</button>
+      <button type="button" class="toolbar-action" data-command="open-ai">AI Assistant</button>
+      <span id="selectedFileName" class="toolbar-context">No invoice selected</span>
+    </div>
+
+    <main class="desktop-workspace">
+      <aside class="desktop-sidebar" id="desktopSidebar" aria-label="Invoice tools">
+        <section class="tool-panel">
+          <div class="panel-heading">
+            <h2>Invoice Input</h2>
+            <span>PDF</span>
+          </div>
+          <p>Select an invoice and use the main toolbar to start deterministic validation.</p>
+          <div class="sidebar-file-state" id="sidebarFileState">Waiting for a PDF file</div>
+        </section>
+
+        <section class="tool-panel base64-panel">
+          <div class="panel-heading">
+            <h3>Base64 → PDF</h3>
+            <span>Utility</span>
+          </div>
+          <label for="base64Input">Base64 PDF data</label>
+          <textarea id="base64Input" placeholder="Paste Base64 PDF data here..."></textarea>
+          <div class="panel-actions">
+            <button id="convertBtn" type="button">Convert to PDF</button>
+            <button id="emtyButton" type="button">Empty textarea</button>
+            <button id="btnOcr" type="button">Run OCR (server)</button>
+          </div>
+          <pre id="ocrPreview" aria-live="polite"></pre>
+        </section>
+      </aside>
+
+      <section class="desktop-content" aria-label="Invoice validation workspace">
+        <div class="workspace-header">
+          <div>
+            <h2>Validation Workspace</h2>
+            <p>Supplier, company, PO, VAT, posting and history results</p>
+          </div>
+          <span class="workspace-badge" id="workspaceState">Ready</span>
+        </div>
+
+        <div class="result-stack">
+          <section class="output-panel output-panel-primary">
+            <div class="output-panel-title"><h3>Invoice Analysis</h3><span>Primary output</span></div>
+            <div id="result" class="output-content" aria-live="polite">Please upload a PDF and click "Process Invoice".</div>
+          </section>
+
+          <section class="output-panel">
+            <div class="output-panel-title"><h3>VAT &amp; Diagnostic Details</h3><span>Classification</span></div>
+            <div id="dbg" class="output-content"></div>
+          </section>
+
+          <section class="output-panel">
+            <div class="output-panel-title"><h3>Lines</h3><span>Extracted data</span></div>
+            <div id="lines" class="output-content">Lines:</div>
+          </section>
+
+          <section class="output-panel">
+            <div class="output-panel-title"><h3>Posting Segments</h3><span>Manual suggestion</span></div>
+            <div id="manualSugest" class="output-content"></div>
+          </section>
+
+          <section class="output-panel">
+            <div class="output-panel-title"><h3>Supplier History &amp; Additional Results</h3><span>Cross-check</span></div>
+            <div id="otherResult" class="output-content"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <footer class="desktop-statusbar">
+      <span id="appStatus">Ready</span>
+      <span>Invoice Posting Assistant</span>
+      <span id="appClock" aria-label="Local time"></span>
+    </footer>
+  </div>
+
+  <div id="ap-ai-fab" aria-label="Open AI Assistant" title="Open AI Assistant">
+    <img src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14/assets/svg/1f916.svg" alt="AI" width="28" height="28">
+  </div>
+
+  <div id="ap-ai-chat" aria-live="polite" aria-modal="true" role="dialog" aria-labelledby="ap-ai-chat-title" hidden>
+    <div class="ap-ai-chat__panel">
+      <div class="ap-ai-chat__header" id="ap-ai-chat-drag">
+        <div class="ap-ai-chat__title" id="ap-ai-chat-title">AP AI Assistant</div>
+        <div class="ap-ai-chat__actions">
+          <button class="ap-ai-btn ap-ai-btn--ghost" id="ap-ai-minimize" type="button" title="Minimize">−</button>
+          <button class="ap-ai-btn ap-ai-btn--ghost" id="ap-ai-close" type="button" title="Close">×</button>
+        </div>
+      </div>
+      <div class="ap-ai-chat__messages" id="ap-ai-messages" role="log"></div>
+      <div class="ap-ai-chat__actions-bar">
+        <button id="ai-btn-validate" class="ap-ai-btn ap-ai-btn--primary" type="button">Validation</button>
+        <button id="ai-btn-retour" class="ap-ai-btn ap-ai-btn--retour" type="button">Retour Invoice Email</button>
+      </div>
+      <div class="ap-ai-chat__composer">
+        <textarea id="ap-ai-input" placeholder="Ask me to validate this invoice or draft an email…" rows="2"></textarea>
+        <button id="ap-ai-send" class="ap-ai-btn ap-ai-btn--primary" type="button">Send</button>
       </div>
     </div>
   </div>
-  
-  
-  <div id="result">Please upload a PDF and click "Process Invoice".</div><br>
-  <div id="dbg"></div></div><br>
-  <div id="lines">Lines:</div></div><br>
-  <div id="manualSugest"></div></div><br>
-  <div id="otherResult"></div></div><br>
-  
-      <!-- A regular button somewhere in your UI (optional) -->
-    <!-- <button id="btn-validate-ai" style="margin:10px 0;">Validate with AI</button> -->
 
-    <!-- Floating AI Button -->
-    <div id="ap-ai-fab" aria-label="Open AI Assistant" title="Open AI Assistant">
-        <img src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14/assets/svg/1f916.svg"
-          alt="AI" 
-          style="width:28px; height:28px;">
-    </div>
-
-    <!-- AI Chatbox -->
-    <div id="ap-ai-chat" aria-live="polite" aria-modal="true" role="dialog" aria-labelledby="ap-ai-chat-title" hidden>
-      <div class="ap-ai-chat__panel">
-        <div class="ap-ai-chat__header" id="ap-ai-chat-drag">
-          <div class="ap-ai-chat__title" id="ap-ai-chat-title">AP AI Assistant</div>
-          <div class="ap-ai-chat__actions">
-            <button class="ap-ai-btn ap-ai-btn--ghost" id="ap-ai-minimize" title="Minimize">—</button>
-            <button class="ap-ai-btn ap-ai-btn--ghost" id="ap-ai-close" title="Close">✕</button>
-          </div>
-        </div>
-
-        <div class="ap-ai-chat__messages" id="ap-ai-messages" role="log"></div>
-
-      <!-- NEW ACTION BAR BUTTONS -->
-      <div class="ap-ai-chat__actions-bar" style="
-          border-top:1px solid #e5e7eb;
-          padding:8px;
-          display:flex;
-          gap:8px;
-          background:#ffffff;
-      ">
-          <button id="ai-btn-validate" class="ap-ai-btn ap-ai-btn--primary" style="flex:1;">
-              Validation
-          </button>
-          <button id="ai-btn-retour" class="ap-ai-btn" style="flex:1;background:#ffdddd;color:#a40000;">
-              Retour Invoice Email
-          </button>
-      </div>
-
-        <div class="ap-ai-chat__composer">
-          <textarea id="ap-ai-input" placeholder="Ask me to validate this invoice or draft an email…" rows="2"></textarea>
-          <button id="ap-ai-send" class="ap-ai-btn ap-ai-btn--primary">Send</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Load scripts (ensure only once, and in this order) -->
-    <script src="https://alcdn.msauth.net/browser/2.39.0/js.min.js"></script>
-    <script src="script.js" defer></script>
-    <script src="retour-email.js" defer></script>
-    <script src="ai-chat.js" defer></script>
-
+  <script src="https://alcdn.msauth.net/browser/2.39.0/js.min.js"></script>
+  <script src="script.js" defer></script>
+  <script src="retour-email.js" defer></script>
+  <script src="ai-chat.js" defer></script>
 </body>
 </html>
-
-
-
-
