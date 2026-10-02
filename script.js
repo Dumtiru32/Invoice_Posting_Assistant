@@ -1051,34 +1051,113 @@ async function convertAndProcessBase64(base64String) {
 
     // Detect Document Type
   // ------------------------------
-  function detectDocumentType(text) {
-  const normalized = text.toLowerCase();
+function detectDocumentType(text) {
+  const normalized = String(text || "").toLowerCase();
 
-  const invoiceKeywords = ["invoice", "factuur", "fattura", "factura", "rechnung", "facture"];
-  const creditKeywords = ["creditnota", "krediet nota", "credit nota", "CREDIT MEMO", "credit memo"];
+  const invoiceKeywords  = ["invoice", "factuur", "fattura", "factura", "rechnung", "facture"];
+  const creditKeywords   = ["creditnota", "krediet nota", "credit nota", "credit memo", "credit note"];
   const proformaKeywords = ["proforma", "proforma factuur"];
-  if (proformaKeywords.some(k => normalized.includes(k))) return "Proforma";  
-  if (creditKeywords.some(k => normalized.includes(k))) return "Credit Note";
-  if (invoiceKeywords.some(k => normalized.includes(k))) return "Invoice";
-  
-  
+
+  if (proformaKeywords.some(k => normalized.includes(k))) return "Proforma";
+  if (creditKeywords.some(k => normalized.includes(k)))   return "Credit Note";
+  if (invoiceKeywords.some(k => normalized.includes(k)))  return "Invoice";
   return "Other";
   }
 
   // ------------------------------
   // Detect Invoice Number
   // ------------------------------
+// ------------------------------------------------------------
+  // LABEL HELPERS (forward + reverse labels, multi-label support)
+  //   "Invoice No"            -> value AFTER the label
+  //   "[Page]"                -> value BEFORE the label (reverse label)
+  //   "[Page] | Invoice No"   -> several labels, tried in order, first hit wins
+  // ------------------------------------------------------------
+  function splitLabels(raw) {
+    return String(raw ?? "").split("|").map(s => s.trim()).filter(Boolean);
+  }
+
+  function parseLabelSpec(raw) {
+    const s = String(raw ?? "").trim();
+    const m = s.match(/^\[\s*([\s\S]+?)\s*\]$/);
+    return m ? { reverse: true, label: m[1] } : { reverse: false, label: s };
+  }
+
+  function labelToRegexSource(label) {
+    return label.trim().split(/\s+/)
+      .map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("\\s*");
+  }
+
+  const TOKEN_SRC = "[A-Za-z0-9][A-Za-z0-9\\-/_.]*";
+  const DATE_SRC = "(?:\\d{1,2}[./]\\d{1,2}[./]\\d{4}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}-(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-\\d{4})";
+
+  // Single label: value immediately before (reverse) or after (forward) the label
+  function extractValueBySingleLabel(text, rawLabel, valueSrc = TOKEN_SRC) {
+    if (!text || !rawLabel) return null;
+    const { reverse, label } = parseLabelSpec(rawLabel);
+    if (!label) return null;
+    const lab = labelToRegexSource(label);
+    const clean = v => v.replace(/[.\-/_]+$/, "").trim();
+
+    if (reverse) {
+      const re = new RegExp(
+        `(?<![A-Za-z0-9\\-/_.])(${valueSrc})\\s*[:\\-]?\\s*${lab}(?![A-Za-z0-9])`, "gi");
+      const m = re.exec(text);
+      return m ? clean(m[1]) : null;
+    }
+    const re = new RegExp(`${lab}\\s*[:\\-]?\\s*(${valueSrc})`, "i");
+    const m = text.match(re);
+    return m ? clean(m[1]) : null;
+  }
+
+  // Single label for dates: forward = first date after label, reverse = last date before label
+  function extractDateBySingleLabel(text, rawLabel) {
+    if (!text || !rawLabel) return null;
+    const { reverse, label } = parseLabelSpec(rawLabel);
+    if (!label) return null;
+    const m = new RegExp(labelToRegexSource(label), "i").exec(text);
+    if (!m) return null;
+    if (reverse) {
+      const all = text.slice(0, m.index).match(new RegExp(DATE_SRC, "gi"));
+      return all ? all[all.length - 1] : null;
+    }
+    const d = text.slice(m.index + m[0].length).match(new RegExp(DATE_SRC, "i"));
+    return d ? d[0] : null;
+  }
+
+  // Multi-label versions: return { value, label } for the first label that matches
+  function extractValueByLabelDetailed(text, rawLabels, valueSrc = TOKEN_SRC) {
+    for (const lbl of splitLabels(rawLabels)) {
+      const v = extractValueBySingleLabel(text, lbl, valueSrc);
+      if (v) return { value: v, label: lbl };
+    }
+    return null;
+  }
+
+  function extractDateByLabelDetailed(text, rawLabels) {
+    for (const lbl of splitLabels(rawLabels)) {
+      const d = extractDateBySingleLabel(text, lbl);
+      if (d) return { value: d, label: lbl };
+    }
+    return null;
+  }
+
+  // Simple wrappers (value only)
+  function extractValueByLabel(text, rawLabels, valueSrc = TOKEN_SRC) {
+    return extractValueByLabelDetailed(text, rawLabels, valueSrc)?.value ?? null;
+  }
+  function extractDateByLabel(text, rawLabels) {
+    return extractDateByLabelDetailed(text, rawLabels)?.value ?? null;
+  }
+
+  function detectInvoiceNumberDetailed(text, supplier) {
+    if (!supplier?.InvoiceN_label) return null;
+    return extractValueByLabelDetailed(normalizeSpaces(text), supplier.InvoiceN_label);
+  }
+
   function detectInvoiceNumber(text, supplier) {
-    if (!supplier || !supplier["InvoiceN_label"]) return null;
-
-    const label = supplier["InvoiceN_label"];
-    const patternRight = new RegExp(`${label}\\s*[:\\-]?\\s*([A-Za-z0-9\\-/]+)`, "i");
-    const patternBelow = new RegExp(`${label}[^\\n\\r]{0,30}[\\n\\r\\s]+([A-Za-z0-9\\-/]+)`, "i");
-
-    let match = text.match(patternRight);
-    if (!match) match = text.match(patternBelow);
-
-    return match ? match[1].trim() : null;
+    return detectInvoiceNumberDetailed(text, supplier)?.value ?? null;
   }
     function detectInvoiceNumberPeppol(text, supplier) {
     if (!supplier || !supplier["InvoiceN_label"]) return null;
@@ -1480,123 +1559,51 @@ async function convertAndProcessBase64(base64String) {
      
      
       
-// Matches:
-//  - 05/01/2026
-//  - 05-JAN-2026 (case-insensitive)
-const DDMMYYYY = String.raw`
-(?:
-  (?:0[1-9]|[12][0-9]|3[01])
-  \/
-  (?:0[1-9]|1[0-2])
-  \/
-  (?:19|20)\d{2}
-)
-|
-(?:
-  (?:0[1-9]|[12][0-9]|3[01])
-  -
-  (?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)
-  -
-  (?:19|20)\d{2}
-)
-`.replace(/\s+/g, "");
-
-
-      /**
-       * Build a tolerant label regex:
-       *  - ignores casing
-       *  - allows extra spaces and PDF line breaks
-       */
-      function buildLabelRegex(label) {
-        if (!label) return null;
-        const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        return new RegExp(
-          escaped.replace(/\s+/g, "\\s*") + "\\s*[:\\-]?",
-          "i"
-        );
-      }
-
-      /**
-       * Extract first dd/mm/yyyy AFTER a label
-       */
-      function extractDateAfterLabel(text, labelRegex) {
-        if (!labelRegex) return null;
-        const match = text.match(labelRegex);
-        if (!match) return null;
-
-        const tail = text.slice(match.index + match[0].length);
-        const dateMatch = tail.match(new RegExp(DDMMYYYY));
-        return dateMatch ? dateMatch[0] : null;
-      }
-
-      /**
-       * Main detector
-       *
-       * Priority:
-       * 1️⃣ Literal "Issue Date:" label
-       * 2️⃣ Supplier.InvoiceDate label (Issue Date)
-       * 3️⃣ Supplier.DueDate_label label (Due Date)
-       */
+// ------------------------------------------------------------
+// ISSUE / DUE DATE DETECTION (uses the label helpers above)
+// Priority: literal "Issue Date"/"Due Date" -> Supplier.InvoiceDate_label / DueDate_label
+// Supports: dd/mm/yyyy, dd.mm.yyyy, yyyy-mm-dd, dd-MON-yyyy
+// Labels support "[reverse]" and "a | b | c" (see label helpers)
+// ------------------------------------------------------------
       function detectIssueAndDueDates(text, supplier = null) {
         if (!text) {
-          return { issueDate: null, dueDate: null, debug: "No PDF text." };
+          return { issueDate: null, dueDate: null, issueLabel: null, dueLabel: null };
         }
+        const t = text.replace(/\s+/g, " ");
 
-        // Normalize PDF whitespace noise
-        const normalizedText = text.replace(/\s+/g, " ");
-
-        // --- 1️⃣ ISSUE DATE ---
-        let issueDate = null;
-        let dueDate = null;
-
-        // Default label
-        const issueDefaultRegex = buildLabelRegex("Issue Date");
-        issueDate = extractDateAfterLabel(normalizedText, issueDefaultRegex);
-        const dueDefaultRegex = buildLabelRegex("Due Date");
-        dueDate = extractDateAfterLabel(normalizedText, dueDefaultRegex);
-
-        // Fallback to Supplier.json label
-        if (!issueDate && supplier?.InvoiceDate_label) {
-          const issueSupplierRegex = buildLabelRegex(supplier.InvoiceDate_label);
-          issueDate = extractDateAfterLabel(normalizedText, issueSupplierRegex);
-        }
-        if (!dueDate && supplier?.DueDate_label) {
-          const dueSupplierRegex = buildLabelRegex(supplier.DueDate_label);
-          dueDate = extractDateAfterLabel(normalizedText, dueSupplierRegex);
-          
-        }
-
-       
+        const issue = extractDateByLabelDetailed(t, "Issue Date")
+                   || extractDateByLabelDetailed(t, supplier?.InvoiceDate_label);
+        const due   = extractDateByLabelDetailed(t, "Due Date")
+                   || extractDateByLabelDetailed(t, supplier?.DueDate_label);
 
         return {
-          issueDate,
-          dueDate,
-          debug: {
-            issueLabelUsed: issueDate
-              ? (issueDefaultRegex.test(normalizedText)
-                  ? "Issue Date"
-                  : supplier?.InvoiceDate)
-              : null,
-            dueLabelUsed: dueDate ? supplier?.DueDate_label : null
-          }
+          issueDate: issue?.value ?? null, issueLabel: issue?.label ?? null,
+          dueDate:   due?.value   ?? null, dueLabel:   due?.label   ?? null
         };
       }
-      
+
       function normalizeInvoiceDate(dateStr) {
         if (!dateStr) return null;
+        const d = String(dateStr).trim();
 
-        // Already dd/mm/yyyy
-        if (dateStr.includes("/")) return dateStr;
-
-        // Convert 05-JAN-2026 → 05/01/2026
+        // yyyy-mm-dd -> dd/mm/yyyy
+        if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+          const [y, m, dd] = d.split("-");
+          return `${dd}/${m}/${y}`;
+        }
+        // dd/mm/yyyy or dd.mm.yyyy -> dd/mm/yyyy
+        if (/^\d{1,2}[./]\d{1,2}[./]\d{4}$/.test(d)) {
+          const [dd, m, y] = d.split(/[./]/);
+          return `${dd.padStart(2, "0")}/${m.padStart(2, "0")}/${y}`;
+        }
+        // dd-MON-yyyy -> dd/mm/yyyy
         const months = {
           JAN: "01", FEB: "02", MAR: "03", APR: "04",
           MAY: "05", JUN: "06", JUL: "07", AUG: "08",
           SEP: "09", OCT: "10", NOV: "11", DEC: "12"
         };
-
-        const [dd, mon, yyyy] = dateStr.toUpperCase().split("-");
-        return months[mon] ? `${dd}/${months[mon]}/${yyyy}` : dateStr;
+        const [dd, mon, yyyy] = d.toUpperCase().split("-");
+        return months[mon] ? `${dd.padStart(2, "0")}/${months[mon]}/${yyyy}` : d;
       }
 
       /**
@@ -2324,14 +2331,15 @@ if (supplierTypeRaw.endsWith("NPO")) {
         
 
         // --- Detect invoice number ---
-        const invoiceNumber = detectInvoiceNumber(text, supplier);
+        const invoiceNumberInfo = detectInvoiceNumberDetailed(text, supplier);
+        const invoiceNumber = invoiceNumberInfo?.value ?? null;
         const invoiceNumberPeppol = detectInvoiceNumberPeppol(text, supplier);
-        //const output2 = document.getElementById("otherResult");
+        const via = s => `<span style="color:#666;">(via ${s})</span>`;
         if (invoiceNumberPeppol) {
-          output += `🔢 Invoice Number detected: <strong>${invoiceNumberPeppol}</strong>\n`;
+          output += `🔢 Invoice Number detected: <strong>${invoiceNumberPeppol}</strong> ${via("Peppol")}\n`;
         }
         else if(invoiceNumber) {
-          output += `🔢 Invoice Number detected: <strong>${invoiceNumber}</strong>\n`;
+          output += `🔢 Invoice Number detected: <strong>${invoiceNumber}</strong> ${via(invoiceNumberInfo.label)}\n`;
         }
         else {
         output += '⚠️ <strong>The Invoice Number is not detected, check it manually!</strong>\n';
@@ -2358,22 +2366,22 @@ if (supplierTypeRaw.endsWith("NPO")) {
 
         
         // 🔎 Detect Issue Date & Due Date (dd/mm/yyyy after "Issue Date:")
-        let { issueDate, dueDate, debug: dateDebug } = detectIssueAndDueDates(text);
+        let { issueDate, dueDate, issueLabel, dueLabel } = detectIssueAndDueDates(text, supplier);
         
         issueDate = normalizeInvoiceDate(issueDate);
         dueDate   = normalizeInvoiceDate(dueDate);
 
         if (issueDate) {
           
-          output += `📅 Issue Date: <strong>${issueDate}</strong>\n`;
+          output += `📅 Issue Date: <strong>${issueDate}</strong> ${via(issueLabel)}\n`;
         } else {
           output += `⚠️ Issue Date not found.\n`;
         }
         if (dueDate) {
           
-          output += `⏳ Due Date: <strong>${dueDate}</strong>\n`;
+          output += `⏳ Due Date: <strong>${dueDate}</strong> ${via(dueLabel)}\n`;
         } else {
-          output += `⚠️ Due Date (second dd/mm/yyyy after label) not found.\n`;
+          output += `⚠️ Due Date not found.\n`;
         }
        
 
@@ -2507,7 +2515,8 @@ if (supplierTypeRaw.endsWith("NPO")) {
 
                 output += `📦 Purchase Order(s) detected:\n`;
 
-                poNumbers.forEach(po => {
+                poNumbers.forEach((po, poIndex) => {
+                    const rowBg = (poIndex % 2 === 0) ? "#ffffff" : "#e9e9e9"; // 1st, 3rd, 5th PO → white | 2nd, 4th, 6th PO → light grey
                     const matches = PoData.filter(row =>
                         String(row["PO Number"]) === String(po)
                     );
@@ -2579,7 +2588,7 @@ if (supplierTypeRaw.endsWith("NPO")) {
                             // ROW RENDERING
                             // ───────────────────────────────────────────────
                             tableHTML += `
-                <tr>
+                <tr style="background-color:${rowBg};">
                     <td>${match["Business Unit"]}</td>
                     <td>${match["PO Number"]}</td>
                     <td>${match["PO Header Description"]}</td>
@@ -2602,7 +2611,7 @@ if (supplierTypeRaw.endsWith("NPO")) {
                     } else {
                         // NOT FOUND placeholder row
                         tableHTML += `
-                <tr>
+                <tr style="background-color:${rowBg};">
                     <td>N/A</td>
                     <td>${po}</td>
                     <td>N/A</td>
@@ -3666,3 +3675,18 @@ travelBlocks.forEach(block => {
     }
   });
 })();
+
+// ------------------------------------------------------------
+// LABEL TESTER (optional UI in index.html: #testLabel, #testLabelBtn, #testLabelOut)
+// Try a label such as "[Page]" or "[Page] | Invoice No" on the last processed PDF.
+// ------------------------------------------------------------
+document.getElementById("testLabelBtn")?.addEventListener("click", () => {
+  const out = document.getElementById("testLabelOut");
+  const t = window.__lastPdfText;
+  if (!t) { out.textContent = " ⚠️ Process a PDF first."; return; }
+  const lbl = document.getElementById("testLabel").value;
+  const r = extractValueByLabelDetailed(normalizeSpaces(t), lbl);
+  out.innerHTML = r
+    ? ` ✅ <strong>${r.value}</strong> <span style="color:#666;">(via ${r.label})</span>`
+    : " ❌ not found";
+});
