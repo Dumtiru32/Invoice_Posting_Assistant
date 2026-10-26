@@ -117,3 +117,19 @@ body.compact-mode .result-stack { gap: 6px; }
   .toolbar-context { width: 100%; margin-left: 0; }
   .desktop-window-controls { display: none; }
 }
+
+
+/* Supplier Lines from History: fixed-layout table with resizable columns */
+.supplier-history-table-wrap { width: 100%; max-width: 100%; margin-top: 10px; overflow-x: auto; overflow-y: visible; border: 1px solid var(--line-mid); border-radius: 4px; scrollbar-gutter: stable; -webkit-overflow-scrolling: touch; }
+#supplierHistoryTable { width: max-content; min-width: 100%; margin: 0; border: 0; table-layout: fixed; border-collapse: collapse; white-space: nowrap; }
+#supplierHistoryTable th, #supplierHistoryTable td { min-width: 0; max-width: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#supplierHistoryTable tbody tr:hover td { background-color: var(--surface-blue-light); }
+#supplierHistoryTable th { position: sticky; top: 0; z-index: 4; padding: 0; overflow: visible; }
+.supplier-history-header-content { position: relative; display: flex; align-items: center; min-width: 0; min-height: 32px; padding: 6px 12px 6px 6px; }
+.supplier-history-header-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#supplierHistoryTable .excel-filter-btn { flex: 0 0 auto; }
+.resize-handle { position: absolute; top: 0; right: -4px; bottom: 0; z-index: 8; width: 9px; cursor: col-resize; touch-action: none; user-select: none; -webkit-user-select: none; }
+.resize-handle::after { content: ""; position: absolute; top: 4px; bottom: 4px; left: 4px; width: 2px; border-radius: 2px; background: var(--line-mid); opacity: .7; }
+.resize-handle:hover::after, .resize-handle.is-resizing::after { width: 3px; background: var(--brand-blue); opacity: 1; }
+#supplierHistoryTable.is-resizing { cursor: col-resize; }
+body.column-resize-active, body.column-resize-active * { cursor: col-resize !important; user-select: none !important; -webkit-user-select: none !important; }

@@ -3034,11 +3034,13 @@ travelBlocks.forEach(block => {
     // Build result table
       let html = `
         <h3>📦 Supplier Lines from History</h3>
-        <table id="supplierHistoryTable" border="1" cellpadding="5" cellspacing="0" style="border-collapse:collapse;margin-top:10px;">
+        <div class="supplier-history-table-wrap" tabindex="0" aria-label="Scrollable supplier history table">
+          <table id="supplierHistoryTable" border="1" cellpadding="5" cellspacing="0">
+            <colgroup>${Object.keys(matchingLines[0]).map(() => `<col>`).join("")}</colgroup>
           <thead>
           <tr style="background:#eef;">
             ${Object.keys(matchingLines[0])
-              .map((key) => `<th>${key}</th>`)
+              .map((key) => `<th scope="col">${key}</th>`)
               .join("")}
           </tr>
           </thead>
@@ -3050,11 +3052,13 @@ travelBlocks.forEach(block => {
           .join("")}</tr>`;
       }
 
-      html += "</tbody></table>";
+      html += "</tbody></table></div>";
       container.innerHTML += html;
 
-      // Enable Excel-style per-column filtering/sorting on the freshly rendered table
-      initExcelFilters(document.getElementById("supplierHistoryTable"));
+      // Enable filtering first, then add non-destructive column resize handles.
+      const historyTable = document.getElementById("supplierHistoryTable");
+      initExcelFilters(historyTable);
+      initResizableColumns(historyTable);
     } catch (err) {
       console.error("Error loading supplier segment data:", err);
       document.getElementById("otherResult").innerHTML += `<p>❌ Error loading supplier segment data: ${err.message}</p>`;
@@ -3327,16 +3331,29 @@ travelBlocks.forEach(block => {
       th.innerHTML = "";
       th.style.whiteSpace = "nowrap";
 
+      const headerContent = document.createElement("div");
+      headerContent.className = "supplier-history-header-content";
+
       const span = document.createElement("span");
+      span.className = "supplier-history-header-label";
       span.textContent = label;
-      th.appendChild(span);
+      headerContent.appendChild(span);
 
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "excel-filter-btn";
       btn.textContent = "▾";
       btn.title = "Filter / Sort";
-      th.appendChild(btn);
+      headerContent.appendChild(btn);
+
+      const handle = document.createElement("div");
+      handle.className = "resize-handle";
+      handle.setAttribute("role", "separator");
+      handle.setAttribute("aria-orientation", "vertical");
+      handle.setAttribute("aria-label", `Resize ${label} column`);
+      handle.title = "Drag to resize column";
+      headerContent.appendChild(handle);
+      th.appendChild(headerContent);
 
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -3345,6 +3362,83 @@ travelBlocks.forEach(block => {
     });
 
     document.addEventListener("click", closeAllExcelFilterDropdowns);
+  }
+
+  // ------------------------------------------------------------
+  // Pointer-based column resizing for Supplier Lines from History.
+  // Widths are applied to <col> elements so dynamic rows remain untouched.
+  // ------------------------------------------------------------
+  function initResizableColumns(table) {
+    if (!table || table.dataset.resizableInitialized === "true") return;
+    const headerRow = table.tHead?.rows?.[0];
+    const wrapper = table.closest(".supplier-history-table-wrap");
+    if (!headerRow || !wrapper) return;
+    table.dataset.resizableInitialized = "true";
+    const headers = Array.from(headerRow.cells);
+    const cols = Array.from(table.querySelectorAll(":scope > colgroup > col"));
+    if (cols.length !== headers.length) return;
+    const MIN_WIDTH = 50;
+    const DEFAULT_WIDTH = 160;
+    const storageKey = `supplierHistoryTable.columnWidths.v1:${headers.map((th) => th.querySelector(".supplier-history-header-label")?.textContent.trim() || "").join("|")}`;
+    let savedWidths = null;
+    try {
+      const parsed = JSON.parse(localStorage.getItem(storageKey));
+      if (Array.isArray(parsed) && parsed.length === headers.length) savedWidths = parsed;
+    } catch (error) { console.warn("Could not restore supplier history column widths:", error); }
+    headers.forEach((th, index) => {
+      const saved = Number(savedWidths?.[index]);
+      const label = th.querySelector(".supplier-history-header-label")?.textContent || "";
+      const width = Number.isFinite(saved) && saved >= MIN_WIDTH ? saved : Math.max(DEFAULT_WIDTH, Math.min(320, 44 + label.length * 8));
+      cols[index].style.width = `${width}px`;
+    });
+    const applyTableWidth = () => {
+      const total = cols.reduce((sum, col) => sum + (parseFloat(col.style.width) || DEFAULT_WIDTH), 0);
+      table.style.width = `${Math.max(total, wrapper.clientWidth)}px`;
+    };
+    const persistWidths = () => {
+      try { localStorage.setItem(storageKey, JSON.stringify(cols.map((col) => Math.round(parseFloat(col.style.width) || DEFAULT_WIDTH)))); }
+      catch (error) { console.warn("Could not save supplier history column widths:", error); }
+    };
+    applyTableWidth();
+    headers.forEach((th, columnIndex) => {
+      const handle = th.querySelector(".resize-handle");
+      if (!handle) return;
+      handle.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 && event.pointerType !== "touch") return;
+        event.preventDefault();
+        event.stopPropagation();
+        const startX = event.pageX;
+        const startWidth = th.offsetWidth;
+        const pointerId = event.pointerId;
+        handle.classList.add("is-resizing");
+        table.classList.add("is-resizing");
+        document.body.classList.add("column-resize-active");
+        handle.setPointerCapture?.(pointerId);
+        const onPointerMove = (moveEvent) => {
+          if (moveEvent.pointerId !== pointerId) return;
+          moveEvent.preventDefault();
+          const deltaX = moveEvent.pageX - startX;
+          cols[columnIndex].style.width = `${Math.max(MIN_WIDTH, Math.round(startWidth + deltaX))}px`;
+          applyTableWidth();
+        };
+        const stopResize = (endEvent) => {
+          if (endEvent.pointerId !== pointerId) return;
+          window.removeEventListener("pointermove", onPointerMove);
+          window.removeEventListener("pointerup", stopResize);
+          window.removeEventListener("pointercancel", stopResize);
+          handle.classList.remove("is-resizing");
+          table.classList.remove("is-resizing");
+          document.body.classList.remove("column-resize-active");
+          if (handle.hasPointerCapture?.(pointerId)) handle.releasePointerCapture(pointerId);
+          persistWidths();
+        };
+        window.addEventListener("pointermove", onPointerMove, { passive: false });
+        window.addEventListener("pointerup", stopResize);
+        window.addEventListener("pointercancel", stopResize);
+      });
+    });
+    if (typeof ResizeObserver === "function") new ResizeObserver(applyTableWidth).observe(wrapper);
+    else window.addEventListener("resize", applyTableWidth);
   }
 
   // ------------------------------------------------------------
