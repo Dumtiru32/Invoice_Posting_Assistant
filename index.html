@@ -75,7 +75,8 @@
       <span class="toolbar-separator" aria-hidden="true"></span>
       <button type="button" class="toolbar-action" data-command="clear-workspace">Clear Results</button>
       <button type="button" class="toolbar-action" data-command="open-ai">AI Assistant</button>
-      <span id="selectedFileName" class="toolbar-context">No invoice selected</span>
+            <button id="mergingPdfBtn" type="button" class="toolbar-action">Merging PDF</button>
+<span id="selectedFileName" class="toolbar-context">No invoice selected</span>
     </div>
 
     <main class="desktop-workspace">
@@ -143,7 +144,15 @@
       </section>
     </main>
 
-    <footer class="desktop-statusbar">
+    <section id="mergingPdfView" class="merge-view" hidden aria-labelledby="mergeViewTitle">
+    <div class="merge-view-header"><div><h2 id="mergeViewTitle">Merging PDF</h2><p>Inspect the Consumables Excel report first, then upload and validate invoice PDFs.</p></div><button id="closeMergingPdfBtn" type="button" class="toolbar-action">Back to Invoice Validation</button></div>
+    <div class="merge-layout">
+      <section class="merge-card"><div class="merge-step"><span>1</span><div><h3>Inspect Excel report</h3><p>Overview sheet, Segment4 column C, External Document Nr. column F.</p></div></div><label id="mergeReportDrop" class="merge-dropzone" for="mergeReportInput"><strong>Drop the Excel report here</strong><span>or click to browse (.xlsx or .xlsm)</span></label><input id="mergeReportInput" class="merge-hidden-input" type="file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12"><div id="mergeReportFile" class="merge-file-summary">No report selected</div><button id="inspectMergeReportBtn" type="button" class="merge-primary">Inspect report</button></section>
+      <section id="mergePdfUploadCard" class="merge-card is-disabled" aria-disabled="true"><div class="merge-step"><span>2</span><div><h3>Upload required PDFs</h3><p>The report must be inspected before files are accepted. Upload invoice PDFs and, when account 607599 is detected, all waste-related PDFs together here.</p></div></div><label id="mergePdfsDrop" class="merge-dropzone" for="mergePdfsInput"><strong>Drop all required PDFs here</strong><span>Invoice and waste PDFs can be selected together</span></label><input id="mergePdfsInput" class="merge-hidden-input" type="file" accept="application/pdf,.pdf" multiple disabled><div id="mergePdfFiles" class="merge-file-summary">Waiting for report inspection</div><label class="merge-continuation"><span>Optional continuation PDF for later batches</span><input id="mergeContinuationInput" type="file" accept="application/pdf,.pdf" disabled></label><button id="processMergeBtn" type="button" class="merge-primary" disabled>Validate and merge</button></section>
+      <section class="merge-card merge-results-card"><div class="merge-step"><span>3</span><div><h3>Validation and result</h3><p>Merge is blocked whenever a required file is missing, unreadable, duplicate, or ambiguous.</p></div></div><div class="merge-progress" aria-label="Processing progress"><div id="mergeProgressBar"></div></div><div id="mergeProgressText" class="merge-progress-text" aria-live="polite">Ready</div><div id="mergeOrderedList" class="merge-ordered-list"></div><div id="mergeMessages" class="merge-messages" aria-live="polite"></div><a id="mergeDownloadLink" class="merge-download" hidden>Download merged PDF</a></section>
+    </div>
+  </section>
+  <footer class="desktop-statusbar">
       <span id="appStatus">Ready</span>
       <span>Invoice Posting Assistant</span>
       <span id="appClock" aria-label="Local time"></span>

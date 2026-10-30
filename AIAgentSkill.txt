@@ -1,0 +1,27 @@
+Purpose
+Generate the required document list from a customer Consumables report, validate the uploaded invoice PDFs and waste PDFs, and merge them in the exact report order while preserving the report's base filename.
+
+Uses
+Agent capabilities: codeInterpreter
+Runtime files: uploaded Consumables Excel report, uploaded invoice PDFs and waste PDFs together in one upload set (if account 607599 is present), and any previously merged continuation PDF
+Script: scripts/main.py
+Instructions
+Ask the user to upload the customer Consumables Excel report first. Do not request invoice PDFs until the report has been inspected.
+Open the workbook and use the Overview sheet only. Read Segment4 strictly from Column C and External Document Nr. strictly from Column F, beginning below the detected header row and preserving displayed row order. Read Remarks from its labeled column when available. Segment4 and External Document Nr. are pivot parent labels: carry them down to child rows, and create a requirement only on rows where a document number is explicitly printed.
+Select invoice rows for accounts 609007 and 607598; for DELONGHI and KITCHENA, select 601101 instead of 609007. Account 607599 (waste) is NOT an invoice account and follows the separate waste rule below.
+Normalize document lookup text by replacing / with -, apply the account-specific filename rules, and produce an ordered list containing each external document number and its remarks. Show the count and flag duplicate or ambiguous entries.
+Waste rule (Segment4 607599): if account 607599 appears anywhere in the Overview sheet, including a collapsed "607599 Total" row, waste-related supporting documents are mandatory. These rows usually have a blank External Document Nr., so the number of waste documents cannot be determined from the report. Do not invent a count and do not match waste PDFs by document number. Explicitly tell the user to upload ALL waste-related PDFs together with the invoice PDFs in the main upload section (multiple files allowed), and show the Description text of each 607599 row (for example "Renewi 8692893/8692894 2026/08") and any External Document Nr. or Remarks as hints. Do not mark the merge complete while no waste PDF was supplied, or while any waste PDF is unreadable or uploaded twice.
+Ask the user to upload all invoice PDFs from the ordered list. If 20 or fewer source PDFs are required, request them in one batch; otherwise split the ordered list into batches of no more than 20.
+Inspect every uploaded PDF separately before merging. Match each invoice file to the ordered list and identify missing, unreadable, duplicate, ambiguous, or unexpected files. Never guess among ambiguous matches.
+Merge in this order: the previously merged continuation PDF (if any), then the matched invoice PDFs in the exact workbook row order, then the waste PDFs in upload order. For later batches, require the previously merged PDF as the first input and append the next source PDFs in list order.
+Name every final or cumulative merged PDF with the same base filename as the uploaded Consumables report, changing only the extension to .pdf (for example, Consumables October.xlsx becomes Consumables October.pdf). Do not add suffixes such as _merged, _final, dates, or version numbers.
+Return the merged PDF and a concise completion summary. Mark the result complete only when every required invoice was found, readable, uniquely matched, and merged, and (when 607599 is present) at least one readable waste PDF was merged. State that completeness of the waste documents is the user's responsibility because the report cannot verify it.
+Parameters
+Consumables workbook path.
+Uploaded PDF paths containing invoice PDFs and, when required, waste-support PDFs in the same set.
+Optional previously merged PDF path for continuation batches.
+Output
+Ordered required-document list with remarks and exception flags.
+Waste-document request (when 607599 is present) with the report's waste descriptions as hints.
+A merged PDF in report order whose base filename exactly matches the Consumables workbook.
+Completion status with missing, unreadable, duplicate, ambiguous, or unexpected-file details.

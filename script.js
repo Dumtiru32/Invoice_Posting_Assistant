@@ -3784,3 +3784,305 @@ document.getElementById("testLabelBtn")?.addEventListener("click", () => {
     ? ` ✅ <strong>${r.value}</strong> <span style="color:#666;">(via ${r.label})</span>`
     : " ❌ not found";
 });
+
+// Merging PDF workflow: report first, then strict PDF validation and merge.
+(function initPdfMergeWorkspace() {
+  const API = "http://127.0.0.1:5503/api/merge";
+  const ready = (fn) => document.readyState === "loading"
+    ? document.addEventListener("DOMContentLoaded", fn)
+    : fn();
+
+  ready(() => {
+    const $ = (id) => document.getElementById(id);
+    const shell = document.querySelector(".desktop-shell");
+    const view = $("mergingPdfView");
+    const report = $("mergeReportInput");
+    const pdfs = $("mergePdfsInput");
+    const continuation = $("mergeContinuationInput");
+    const inspect = $("inspectMergeReportBtn");
+    const process = $("processMergeBtn");
+    const card = $("mergePdfUploadCard");
+    const messages = $("mergeMessages");
+    const bar = $("mergeProgressBar");
+    const progress = $("mergeProgressText");
+    const download = $("mergeDownloadLink");
+
+    let jobId = null;
+    let inspection = null;
+    let selected = [];
+
+    const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "'": "&#39;",
+      '"': "&quot;"
+    })[character]);
+
+    const setProgress = (number, text) => {
+      if (bar) bar.style.width = `${Math.max(0, Math.min(100, number))}%`;
+      if (progress) progress.textContent = text;
+    };
+
+    const setMessage = (html, type = "") => {
+      if (messages) messages.innerHTML = `<div class="merge-alert ${type}">${html}</div>`;
+    };
+
+    const resetDownload = () => {
+      if (!download) return;
+      download.hidden = true;
+      download.removeAttribute("href");
+    };
+
+    const enable = (on) => {
+      card?.classList.toggle("is-disabled", !on);
+      card?.setAttribute("aria-disabled", String(!on));
+      if (pdfs) pdfs.disabled = !on;
+      if (continuation) continuation.disabled = !on;
+      if (process) {
+        process.disabled = !on || !selected.length;
+      }
+    };
+
+    function mode(on) {
+      shell?.classList.toggle("merge-mode", on);
+      if (view) view.hidden = !on;
+      const appStatus = $("appStatus");
+      if (appStatus) appStatus.textContent = on ? "PDF merging workspace" : "Ready";
+    }
+
+    function drop(id, input, multiple, handler) {
+      const zone = $(id);
+      if (!zone || !input) return;
+
+      ["dragenter", "dragover"].forEach((name) => zone.addEventListener(name, (event) => {
+        event.preventDefault();
+        if (!input.disabled) zone.classList.add("is-dragover");
+      }));
+
+      ["dragleave", "drop"].forEach((name) => zone.addEventListener(name, (event) => {
+        event.preventDefault();
+        zone.classList.remove("is-dragover");
+      }));
+
+      zone.addEventListener("drop", (event) => {
+        if (!input.disabled) {
+          handler(Array.from(event.dataTransfer.files || []).slice(0, multiple ? undefined : 1));
+        }
+      });
+
+      input.addEventListener("change", () => handler(Array.from(input.files || [])));
+    }
+
+    function render(data) {
+      const rows = (data.entries || []).map((item) => `
+        <tr${item.isWasteDocument ? ' class="merge-waste-row"' : ""}>
+          <td>${item.sequence}</td>
+          <td>${esc(item.account)}</td>
+          <td>${esc(item.documentNumber)}</td>
+          <td>${esc(item.remarks)}</td>
+          <td>${item.isWasteDocument ? "Waste-related document required" : ""}</td>
+        </tr>
+      `).join("");
+
+      const orderedList = $("mergeOrderedList");
+      if (orderedList) {
+        orderedList.innerHTML = `
+          <p><strong>${data.count}</strong> required document(s), ${data.batchCount} batch(es) of up to ${data.batchSize}. Output: <strong>${esc(data.outputName)}</strong></p>
+          <table>
+            <thead><tr><th>#</th><th>Segment4</th><th>External Document Nr.</th><th>Remarks</th><th>Requirement</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        `;
+      }
+
+      const wasteDocuments = Array.isArray(data.wasteDocuments) ? data.wasteDocuments : [];
+      const wasteHints = Array.isArray(data.wasteDescriptions) ? data.wasteDescriptions : [];
+      const wasteItems = [
+        ...wasteDocuments.map((item) => `<li><strong>${esc(item.documentNumber)}</strong>${item.remarks ? ` - ${esc(item.remarks)}` : ""}</li>`),
+        ...wasteHints.map((item) => `<li>${esc(item.description)}</li>`)
+      ].join("");
+      const waste = data.wasteDocumentsRequired ? `
+        <div class="merge-alert waste-required">
+          <strong>Waste-related documents required</strong>
+          <p>Segment4 account 607599 was detected. Upload <strong>ALL</strong> waste-related PDFs together with the invoice PDFs in the main <strong>Upload required PDFs</strong> section. The number of documents cannot be determined from the report.</p>
+          ${wasteItems ? `<p>Waste lines found in the report:</p><ul>${wasteItems}</ul>` : ""}
+        </div>
+      ` : "";
+
+      const warnings = (data.warnings || [])
+        .map((warning) => `<div class="merge-alert">${esc(warning)}</div>`)
+        .join("");
+
+      if (messages) {
+        messages.innerHTML = waste + warnings ||
+          '<div class="merge-alert success">Report inspected successfully. Upload the listed PDFs.</div>';
+      }
+    }
+
+    function validation(data) {
+      const details = [];
+      if (data.missing?.length) details.push(`<strong>Missing:</strong> ${data.missing.map((item) => esc(item.documentNumber)).join(", ")}`);
+      if (data.ambiguous?.length) details.push(`<strong>Ambiguous:</strong> ${data.ambiguous.map((item) => `${esc(item.documentNumber)} (${item.candidates.map(esc).join(", ")})`).join("; ")}`);
+      if (data.unreadable?.length) details.push(`<strong>Unreadable:</strong> ${data.unreadable.map((item) => `${esc(item.fileName)}: ${esc(item.error)}`).join("; ")}`);
+      if (data.duplicateUploads?.length) details.push(`<strong>Duplicate upload names:</strong> ${data.duplicateUploads.map(esc).join(", ")}`);
+      if (data.missingWasteDocuments?.length) details.push(`<strong>Missing waste documents (607599):</strong> ${data.missingWasteDocuments.map((item) => esc(item.documentNumber)).join(", ")}`);
+      if (data.ambiguousWasteDocuments?.length) details.push(`<strong>Ambiguous waste documents (607599):</strong> ${data.ambiguousWasteDocuments.map((item) => esc(item.documentNumber)).join(", ")}`);
+      if (data.unexpected?.length) details.push(`<strong>Unexpected:</strong> ${data.unexpected.map(esc).join(", ")}`);
+      setMessage(
+        `${esc(data.message)}<br>Merged source PDFs: <strong>${data.mergedSourceCount}</strong>` +
+        `${data.unexpectedMerged?.length
+          ? `<br><strong>Unexpected PDFs that were merged:</strong> ${data.unexpectedMerged.map(esc).join(", ")}`
+          : ""}` +
+        `${data.unexpected?.length
+          ? `<br>Unexpected files ignored: ${data.unexpected.map(esc).join(", ")}`
+          : ""}`,
+        "success"
+      );
+    }
+
+    function xhr(url, form, onProgress) {
+      return new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open("POST", url);
+        request.responseType = "json";
+        request.upload.onprogress = (event) => {
+          if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 70));
+        };
+        request.onload = () => resolve({
+          ok: request.status >= 200 && request.status < 300,
+          data: request.response || {}
+        });
+        request.onerror = () => reject(new Error(
+          "Cannot reach the local merge service. Start merge_server.py on port 5503."
+        ));
+        request.send(form);
+      });
+    }
+
+    $("mergingPdfBtn")?.addEventListener("click", () => mode(true));
+    $("closeMergingPdfBtn")?.addEventListener("click", () => mode(false));
+
+    drop("mergeReportDrop", report, false, (files) => {
+      const file = files[0];
+      if (!file) return;
+      if (!/\.(xlsx|xlsm)$/i.test(file.name)) {
+        setMessage("Select an .xlsx or .xlsm report.", "error");
+        return;
+      }
+
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      report.files = transfer.files;
+      const reportFile = $("mergeReportFile");
+      if (reportFile) reportFile.textContent = `${file.name} (${(file.size / 1048576).toFixed(2)} MB)`;
+
+      jobId = null;
+      inspection = null;
+      selected = [];
+      if (pdfs) pdfs.value = "";
+      enable(false);
+      const orderedList = $("mergeOrderedList");
+      if (orderedList) orderedList.innerHTML = "";
+      resetDownload();
+    });
+
+    drop("mergePdfsDrop", pdfs, true, (files) => {
+      selected = files.filter((file) => file.name.toLowerCase().endsWith(".pdf"));
+      const mergePdfFiles = $("mergePdfFiles");
+      if (mergePdfFiles) {
+        mergePdfFiles.textContent = selected.length
+          ? `${selected.length} PDF(s):\n${selected.map((file) => file.name).join("\n")}`
+          : "No valid PDFs selected";
+      }
+      enable(Boolean(jobId));
+      resetDownload();
+    });
+
+    inspect?.addEventListener("click", async () => {
+      const file = report?.files?.[0];
+      if (!file) {
+        setMessage("Upload the Consumables Excel report first.", "error");
+        return;
+      }
+
+      inspect.disabled = true;
+      setProgress(10, "Uploading and inspecting report...");
+      if (messages) messages.innerHTML = "";
+
+      try {
+        const form = new FormData();
+        form.append("report", file, file.name);
+        const response = await fetch(`${API}/inspect-report`, { method: "POST", body: form });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `Inspection failed (HTTP ${response.status}).`);
+
+        jobId = data.jobId;
+        inspection = data;
+  
+        render(data);
+        enable(true);
+        setProgress(100, `Report inspected: ${data.count} document(s) required`);
+      } catch (error) {
+        jobId = null;
+        inspection = null;
+            enable(false);
+        setProgress(0, "Inspection failed");
+        setMessage(esc(error.message), "error");
+      } finally {
+        inspect.disabled = false;
+      }
+    });
+
+    process?.addEventListener("click", async () => {
+      if (!jobId || !inspection) return setMessage("Inspect the report first.", "error");
+      if (!selected.length) return setMessage("Upload the required invoice PDFs.", "error");
+
+      process.disabled = true;
+      resetDownload();
+      if (messages) messages.innerHTML = "";
+      setProgress(1, "Preparing upload...");
+
+      const form = new FormData();
+      form.append("jobId", jobId);
+      selected.forEach((file) => form.append("pdfs", file, file.name));
+      const continuationFile = continuation?.files?.[0];
+      if (continuationFile) form.append("continuation", continuationFile, continuationFile.name);
+
+      try {
+        const response = await xhr(`${API}/process`, form, (percentage) => {
+          setProgress(percentage, `Uploading files: ${percentage}%`);
+        });
+
+        setProgress(80, "Validating and applying workbook order...");
+        if (!response.ok) {
+          validation(response.data);
+          setProgress(0, "Validation failed. No output created.");
+          return;
+        }
+
+        const data = response.data;
+        setProgress(100, "Merge complete");
+        setMessage(
+           `${esc(data.message)}<br>Merged source PDFs: <strong>${data.mergedSourceCount}</strong>` +
+          `${data.unexpectedMerged?.length
+              ? `<br><strong>Extra documents that were merged:</strong> ${data.unexpectedMerged.map(esc).join(", ")}`
+              : ""}`,
+            "success"
+        );
+
+        if (download) {
+          download.href = data.downloadUrl;
+          download.download = data.fileName;
+          download.textContent = `Download ${data.fileName}`;
+          download.hidden = false;
+        }
+      } catch (error) {
+        setProgress(0, "Processing failed");
+        setMessage(esc(error.message), "error");
+      } finally {
+        enable(Boolean(jobId));
+      }
+    });
+  });
+})();

@@ -68,3 +68,79 @@ templates/
 consumables_po.html
 manuals.html
 transport_npo.html
+# ------------------------------------------------
+# Python environment
+# ------------------------------------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+
+# ------------------------------------------------
+# Environment variables / secrets
+# ------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+
+# ------------------------------------------------
+# IDE / local machine
+# ------------------------------------------------
+.vscode/
+.idea/
+.vs/
+*.user
+*.suo
+
+# ------------------------------------------------
+# Logs / temporary files
+# ------------------------------------------------
+*.log
+*.tmp
+*.temp
+~$*
+.DS_Store
+Thumbs.db
+
+# ------------------------------------------------
+# Enterprise Excel / invoice data
+# ------------------------------------------------
+*.xlsx
+*.xls
+*.xlsm
+*.xlsb
+*.csv
+
+# ------------------------------------------------
+# Invoice / supporting documents
+# ------------------------------------------------
+*.pdf
+
+# ------------------------------------------------
+# Local application data / generated output
+# ------------------------------------------------
+uploads/
+output/
+outputs/
+temp/
+tmp/
+merge-jobs/
+invoice-posting-merge-jobs/
+
+# ------------------------------------------------
+# Sensitive local configuration
+# ------------------------------------------------
+config.local.*
+settings.local.*
+secrets.*
+credentials.*
+
+# ------------------------------------------------
+# Obsolete development patch
+# ------------------------------------------------
+waste_rule_frontend_patch.js
