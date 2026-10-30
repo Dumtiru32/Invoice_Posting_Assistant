@@ -3787,7 +3787,7 @@ document.getElementById("testLabelBtn")?.addEventListener("click", () => {
 
 // Merging PDF workflow: report first, then strict PDF validation and merge.
 (function initPdfMergeWorkspace() {
-  const API = "http://127.0.0.1:5503/api/merge";
+
   const ready = (fn) => document.readyState === "loading"
     ? document.addEventListener("DOMContentLoaded", fn)
     : fn();
@@ -3807,8 +3807,8 @@ document.getElementById("testLabelBtn")?.addEventListener("click", () => {
     const progress = $("mergeProgressText");
     const download = $("mergeDownloadLink");
 
-    let jobId = null;
     let inspection = null;
+    let currentDownloadUrl = null;
     let selected = [];
 
     const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({
@@ -3830,8 +3830,13 @@ document.getElementById("testLabelBtn")?.addEventListener("click", () => {
 
     const resetDownload = () => {
       if (!download) return;
+      if (currentDownloadUrl) {
+        URL.revokeObjectURL(currentDownloadUrl);
+        currentDownloadUrl = null;
+      }
       download.hidden = true;
       download.removeAttribute("href");
+      download.removeAttribute("download");
     };
 
     const enable = (on) => {
@@ -3941,25 +3946,6 @@ document.getElementById("testLabelBtn")?.addEventListener("click", () => {
       );
     }
 
-    function xhr(url, form, onProgress) {
-      return new Promise((resolve, reject) => {
-        const request = new XMLHttpRequest();
-        request.open("POST", url);
-        request.responseType = "json";
-        request.upload.onprogress = (event) => {
-          if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 70));
-        };
-        request.onload = () => resolve({
-          ok: request.status >= 200 && request.status < 300,
-          data: request.response || {}
-        });
-        request.onerror = () => reject(new Error(
-          "Cannot reach the local merge service. Start merge_server.py on port 5503."
-        ));
-        request.send(form);
-      });
-    }
-
     $("mergingPdfBtn")?.addEventListener("click", () => mode(true));
     $("closeMergingPdfBtn")?.addEventListener("click", () => mode(false));
 
@@ -3977,7 +3963,6 @@ document.getElementById("testLabelBtn")?.addEventListener("click", () => {
       const reportFile = $("mergeReportFile");
       if (reportFile) reportFile.textContent = `${file.name} (${(file.size / 1048576).toFixed(2)} MB)`;
 
-      jobId = null;
       inspection = null;
       selected = [];
       if (pdfs) pdfs.value = "";
@@ -3995,7 +3980,7 @@ document.getElementById("testLabelBtn")?.addEventListener("click", () => {
           ? `${selected.length} PDF(s):\n${selected.map((file) => file.name).join("\n")}`
           : "No valid PDFs selected";
       }
-      enable(Boolean(jobId));
+      enable(Boolean(inspection));
       resetDownload();
     });
 
@@ -4011,20 +3996,16 @@ document.getElementById("testLabelBtn")?.addEventListener("click", () => {
       if (messages) messages.innerHTML = "";
 
       try {
-        const form = new FormData();
-        form.append("report", file, file.name);
-        const response = await fetch(`${API}/inspect-report`, { method: "POST", body: form });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || `Inspection failed (HTTP ${response.status}).`);
-
-        jobId = data.jobId;
+        if (!window.PdfMergeWorkflow) {
+          throw new Error("The browser merge module is unavailable. Make sure merge-workflow.js is in the same folder as index.html.");
+        }
+        const data = await window.PdfMergeWorkflow.inspectWorkbook(file);
         inspection = data;
   
         render(data);
         enable(true);
         setProgress(100, `Report inspected: ${data.count} document(s) required`);
       } catch (error) {
-        jobId = null;
         inspection = null;
             enable(false);
         setProgress(0, "Inspection failed");
@@ -4035,7 +4016,7 @@ document.getElementById("testLabelBtn")?.addEventListener("click", () => {
     });
 
     process?.addEventListener("click", async () => {
-      if (!jobId || !inspection) return setMessage("Inspect the report first.", "error");
+      if (!inspection) return setMessage("Inspect the report first.", "error");
       if (!selected.length) return setMessage("Upload the required invoice PDFs.", "error");
 
       process.disabled = true;
@@ -4043,25 +4024,20 @@ document.getElementById("testLabelBtn")?.addEventListener("click", () => {
       if (messages) messages.innerHTML = "";
       setProgress(1, "Preparing upload...");
 
-      const form = new FormData();
-      form.append("jobId", jobId);
-      selected.forEach((file) => form.append("pdfs", file, file.name));
-      const continuationFile = continuation?.files?.[0];
-      if (continuationFile) form.append("continuation", continuationFile, continuationFile.name);
+      const continuationFile = continuation?.files?.[0] || null;
 
       try {
-        const response = await xhr(`${API}/process`, form, (percentage) => {
-          setProgress(percentage, `Uploading files: ${percentage}%`);
+        const data = await window.PdfMergeWorkflow.processMerge({
+          inspection,
+          pdfFiles: selected,
+          continuationFile,
+          onProgress: (percentage, text) => setProgress(percentage, text)
         });
-
-        setProgress(80, "Validating and applying workbook order...");
-        if (!response.ok) {
-          validation(response.data);
+        if (!data.ok) {
+          validation({ ...data, message: data.error || data.message });
           setProgress(0, "Validation failed. No output created.");
           return;
         }
-
-        const data = response.data;
         setProgress(100, "Merge complete");
         setMessage(
            `${esc(data.message)}<br>Merged source PDFs: <strong>${data.mergedSourceCount}</strong>` +
@@ -4072,7 +4048,8 @@ document.getElementById("testLabelBtn")?.addEventListener("click", () => {
         );
 
         if (download) {
-          download.href = data.downloadUrl;
+          currentDownloadUrl = URL.createObjectURL(data.file);
+          download.href = currentDownloadUrl;
           download.download = data.fileName;
           download.textContent = `Download ${data.fileName}`;
           download.hidden = false;
@@ -4081,7 +4058,7 @@ document.getElementById("testLabelBtn")?.addEventListener("click", () => {
         setProgress(0, "Processing failed");
         setMessage(esc(error.message), "error");
       } finally {
-        enable(Boolean(jobId));
+        enable(Boolean(inspection));
       }
     });
   });
