@@ -883,7 +883,7 @@ async function convertAndProcessBase64(base64String) {
           .map(e => `${e.SegmentException} (VAT: ${e.ExceptionBTW})`)
           .join("<br>")}\n`;
       } else {
-        debugInfo += `⚠️ No approver detected and no exception found.\n`;
+        debugInfo += `<span class="app-warning">⚠️ No approver detected and no exception found.</span>\n`;
       }
     }
 
@@ -995,15 +995,15 @@ async function convertAndProcessBase64(base64String) {
     }
 
     // If we have no manual rules, inform clearly but don't crash
-    if (debug) debugInfo += `⚠️ No Manual mapping found for ${company?.CompanyID ?? "?"}/${supplier?.SupplierType ?? "?"}.\n`;
-    return debugInfo + `<p>⚠️ No manual rules available for this supplier/company.</p>`;
+    if (debug) debugInfo += `<span class="app-warning">⚠️ No Manual mapping found for ${company?.CompanyID ?? "?"}/${supplier?.SupplierType ?? "?"}.</span>\n`;
+    return debugInfo + `<p><span class="app-warning">⚠️ No manual rules available for this supplier/company.</span></p>`;
   }
 
 
     // Build Segments Table
       function buildSegmentsTable(segments) {
         if (!segments || !segments.length) {
-      return "<p>⚠️ No segments available to display.</p>";
+      return '<p><span class="app-warning">⚠️ No segments available to display.</span></p>';
     }
 
     // Split label and segment for sorting
@@ -1266,7 +1266,7 @@ function detectDocumentType(text) {
         supplierType.toLowerCase().includes("transport") && supplierCountry !== ourCountry;
       const vatRates = getUniqueVatRatesAfterTaxRateLabel(text);  
       if (vatRates.length === 0) {
-        html += `⚠️ No Tax Rates found after "Tax Rate" label.\n`;
+        html += `<span class="app-warning">⚠️ No Tax Rates found after "Tax Rate" label.</span>\n`;
 
       } else {
         // Keep only VAT rates that exist in the tva table keys
@@ -1984,7 +1984,7 @@ function detectDocumentType(text) {
       const fields = Object.entries(row)
         .map(([key, val]) => `${key}: ${val ?? ""}`)
         .join(" | ");
-      return `⚠️ Invoice already found in Early Initiated Status report → ${fields}`;
+      return `<span class="app-warning">⚠️ Invoice already found in Early Initiated Status report → ${fields}</span>`;
     }
 
     document.getElementById("processBtn").addEventListener("click", async () => {
@@ -2117,7 +2117,7 @@ function detectDocumentType(text) {
             companyMatchMethod = "VAT";
 
             console.warn(
-                `⚠️ Company matched by VAT fallback: ${c.CompanyBTW}`
+                `<span class="app-warning">⚠️ Company matched by VAT fallback: ${c.CompanyBTW}</span>`
             );
 
             break;
@@ -2139,18 +2139,18 @@ function detectDocumentType(text) {
         } else if (companyMatchMethod === "VAT") {
 
             output += `
-            <div style="background:red;color:white;padding:6px;font-weight:bold;">
+            <div><span class="app-warning">
                 ⚠️ Company matched ONLY by VAT number.
                 The VAT may come from hidden PDF text.
                 Please verify manually.
-            </div>`;
+            </span></div>`;
 
             output += `🏦 VAT detected: <strong>${company.CompanyBTW}</strong>\n`;
         }
 
     } else {
 
-        output += `⚠️ <strong>No company detected.</strong>\n`;
+        output += `<span class="app-warning">⚠️ <strong>No company detected.</strong></span>\n`;
 
     }
     // --------------------------------------------------
@@ -2170,11 +2170,11 @@ function detectDocumentType(text) {
 
     } else {
 
-        output += `
-    <div style="background:red;color:white;padding:8px;font-weight:bold;">
+        output += `<span class="app-warning">
+    <div>
     ⚠️ COMPANY VAT VALIDATION FAILED
     </div>
-    `;
+    </span>`;
 
         output += `${vatValidation.message}\n`;
 
@@ -2303,7 +2303,7 @@ if (supplierTypeRaw.endsWith("NPO")) {
             output += line + "<br>";
         });
 
-        output += `<br>⚠️ Multiple possible clients — please choose manually.<br><br>`;
+        output += `<br><span class="app-warning">⚠️ Multiple possible clients — please choose manually.</span><br><br>`;
     } 
     else {
         output += `❌ <strong>No Client Names or Client Numbers detected.</strong><br><br>`;
@@ -2342,7 +2342,7 @@ if (supplierTypeRaw.endsWith("NPO")) {
           output += `🔢 Invoice Number detected: <strong>${invoiceNumber}</strong> ${via(invoiceNumberInfo.label)}\n`;
         }
         else {
-        output += '⚠️ <strong>The Invoice Number is not detected, check it manually!</strong>\n';
+        output += '<span class="app-warning">⚠️ <strong>The Invoice Number is not detected, check it manually!</strong></span>\n';
         }
 
         // --- Check invoice number against Early Initiated Status report (per CompanyID) ---
@@ -2375,23 +2375,21 @@ if (supplierTypeRaw.endsWith("NPO")) {
           
           output += `📅 Issue Date: <strong>${issueDate}</strong> ${via(issueLabel)}\n`;
         } else {
-          output += `⚠️ Issue Date not found.\n`;
+          output += `<span class="app-warning">⚠️ Issue Date not found.</span>\n`;
         }
         if (dueDate) {
           
           output += `⏳ Due Date: <strong>${dueDate}</strong> ${via(dueLabel)}\n`;
         } else {
-          output += `⚠️ Due Date not found.\n`;
+          output += `<span class="app-warning">⚠️ Due Date not found.</span>\n`;
         }
-       
-
-
         //Display Currency Symbol
         
         const currencyMatch = text.match(/\b(EUR|USD|GBP|RON|CHF|JPY|€)\b/i);
         const currency = currencyMatch ? currencyMatch[1].toUpperCase() : "Unknown";
         output += `💱 Currency detected: <strong>${currency}</strong>\n`;
-
+              
+        
         // 🔑 Special Keyword Detection (Manual "All" rows) — checks PDF text + matched PO fields
           try {
             const allManualRows = Manual.filter(m => (m.OperationType || "").toString().trim().toLowerCase() === "all");
@@ -2436,9 +2434,9 @@ if (supplierTypeRaw.endsWith("NPO")) {
                 const display = [...foundKeywords.entries()]
                   .map(([kw, c]) => c ? `${kw} (${c})` : kw)
                   .join(", ");
-                output += `<div style="background-color:red; color:white; font-weight:bold; padding:4px 6px; display:inline-block; margin-top:4px;">
+                output += `<span class="app-warning"><div style="background-color:red; color:white; font-weight:bold; padding:4px 6px; display:inline-block; margin-top:4px;">
                             ⚠️ Special keyword(s) detected: ${display}
-                          </div>\n`;
+                          </div></span>\n`;
               }
             }
           } catch (e) {
@@ -2484,7 +2482,118 @@ if (supplierTypeRaw.endsWith("NPO")) {
 
         // 🔍 Detect Purchase Order Number(s) right after invoice number
         const poNumbers = detectPoNumbers(text, company);
-        
+
+         // ------------------------------------------------------------
+        // MULTI-PERIOD / HIGH-AMOUNT CHECK
+        // Three independent sources:
+        //   1. PO Header Description
+        //   2. Period indications in the invoice PDF text
+        //   3. Invoice amount in the PDF text
+        // ------------------------------------------------------------
+        const escapeMultiPeriodHtml = value =>
+          String(value ?? "").replace(/[&<>"']/g, character => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;",
+            '"': "&quot;", "'": "&#39;"
+          })[character]);
+
+        // SOURCE 1: PO Header Description only.
+        const poHeaderDetections = [];
+        if (poNumbers?.length && typeof window.checkMultiPeriodInvoice === "function") {
+          poNumbers.forEach(po => {
+            PoData
+              .filter(row => String(row["PO Number"]) === String(po))
+              .forEach(row => {
+                const description = String(row["PO Header Description"] ?? "").trim();
+                if (!description) return;
+
+                const detected = window.checkMultiPeriodInvoice(description);
+                if (detected) {
+                  poHeaderDetections.push({
+                    poNumber: String(po),
+                    detected: String(detected)
+                  });
+                }
+              });
+          });
+        }
+
+        const uniquePoHeaderDetections = Array.from(
+          new Map(
+            poHeaderDetections.map(item => [
+              `${item.poNumber}|${item.detected}`,
+              item
+            ])
+          ).values()
+        );
+
+        // SOURCE 2: Invoice PDF text only.
+        const invoicePeriodResult =
+          typeof window.checkMultiPeriodInvoice === "function"
+            ? window.checkMultiPeriodInvoice(text)
+            : null;
+
+        // SOURCE 3: Invoice PDF amount only.
+        // detectMultiPeriod.js first checks Net Payable -> Exemption;
+        // only if that extraction fails does it use Supplier.Amount_label.
+        const highAmountResult =
+          typeof window.checkHighInvoiceAmountWithSupplier === "function"
+            ? window.checkHighInvoiceAmountWithSupplier(text, supplier)
+            : null;
+
+        const multiPeriodSourceRows = [];
+
+        uniquePoHeaderDetections.forEach(item => {
+          multiPeriodSourceRows.push(`
+            <div class="multi-period-source-row">
+              <strong>PO Header Description (${escapeMultiPeriodHtml(item.poNumber)}):</strong>
+              ${escapeMultiPeriodHtml(item.detected)}
+            </div>
+          `);
+        });
+
+        if (invoicePeriodResult) {
+          multiPeriodSourceRows.push(`
+            <div class="multi-period-source-row">
+              <strong>Invoice period:</strong>
+              ${escapeMultiPeriodHtml(invoicePeriodResult)}
+            </div>
+          `);
+        }
+
+        if (highAmountResult?.normalized) {
+          const amountMethod = highAmountResult.method
+            ? ` (${escapeMultiPeriodHtml(highAmountResult.method)})`
+            : "";
+
+          multiPeriodSourceRows.push(`
+            <div class="multi-period-source-row">
+              <strong>Invoice amount${amountMethod}:</strong>
+              ${escapeMultiPeriodHtml(highAmountResult.normalized)}
+            </div>
+          `);
+        }
+
+        if (multiPeriodSourceRows.length) {
+          output += `
+            <div id="multiPeriodInvoiceStatus"
+                 class="multi-period-status multi-period-status--warning"
+                 role="status" aria-live="polite">
+              <div><strong>⚠️ Multi-period cost indication found</strong></div>
+              ${multiPeriodSourceRows.join("")}
+            </div>
+          
+`;
+        } else {
+          output += `
+            <div id="multiPeriodInvoiceStatus"
+                 class="multi-period-status multi-period-status--success"
+                 role="status" aria-live="polite">
+              ✅ Multiperiod indication not found
+            </div>
+          
+`;
+        }
+
         let tableHTML = `
         <table id="poItemsTable" border="1" style="border-collapse: collapse; width: 100%;">
             <thead>
@@ -2636,7 +2745,7 @@ if (supplierTypeRaw.endsWith("NPO")) {
                 output += tableHTML;
 
             } else {
-                output += `⚠️ No Purchase Order number detected for company ID ${company?.CompanyID || "N/A"}.\n`;
+                output += `<span class="app-warning">⚠️ No Purchase Order number detected for company ID ${company?.CompanyID || "N/A"}.</span>\n`;
             }
         }
 
@@ -2826,7 +2935,7 @@ travelBlocks.forEach(block => {
         // Table goes into #manualSugest
         const manualDiv = document.getElementById("manualSugest");
           try {
-            manualDiv.innerHTML = seg || `<p>⚠️ Manual table returned no content.</p>`;
+            manualDiv.innerHTML = seg || `<p><span class="app-warning">⚠️ Manual table returned no content.</span></p>`;
           } catch (err) {
             console.error("Manual table rendering failed:", err);
             manualDiv.innerHTML = `<p>❌ Manual table rendering failed: ${err.message}</p>`;
@@ -3027,7 +3136,7 @@ travelBlocks.forEach(block => {
 
         const container = document.getElementById("otherResult");
         if (!matchingLines.length) {
-          container.innerHTML += `<p>⚠️ No lines found in cons_GroupSupplierSegments_qry.json for supplier <strong>${supplier?.["Supplier Name"] || "Unknown"}</strong>.</p>`;
+          container.innerHTML += `<p><span class="app-warning">⚠️ No lines found in cons_GroupSupplierSegments_qry.json for supplier <strong>${supplier?.["Supplier Name"] || "Unknown"}</strong>.</span></p>`;
           return;
         }
 
