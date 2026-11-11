@@ -682,26 +682,100 @@ async function convertAndProcessBase64(base64String) {
             ? matches[1]
             : null;
     }
-
     /**
-     * Validate VAT extracted from invoice
-     * against Company.CompanyBTW.
+     * Extract the CUSTOMER / company name located between:
+     *
+     *   References Customer
+     *   <customer name>
+     *   VAT ID Number:
+     *
+     * Example:
+     *   References Customer Katoen Natie ... VAT ID Number: BE...
+     *
+     * @param {string} text - Full extracted PDF text
+     * @returns {string|null}
+     */
+    function extractCustomerOfficialName(text) {
+        if (!text || typeof text !== "string") {
+            return null;
+        }
+
+        // PDF text is already mostly flattened, so normalize spacing.
+        const normalized = normalizeSpaces(text);
+
+        const match = normalized.match(
+            /References\s+Customer\s*:?\s*([\s\S]*?)\s+VAT\s+ID\s+Number\s*:/i
+        );
+
+        if (!match || !match[1]) {
+            return null;
+        }
+
+        const extractedName = normalizeSpaces(match[1]);
+
+        return extractedName || null;
+    }
+
+
+      /**
+       * Normalize a company name for comparison.
+       *
+       * Removes:
+       * - case differences
+       * - spaces
+       * - punctuation
+       * - common legal suffixes
+       *
+       * Examples:
+       * "KATOEN NATIE N.V."
+       * "Katoen Natie NV"
+       *
+       * become comparable.
+       */
+      function normalizeCompanyOfficialName(value) {
+          if (!value) return "";
+
+          return String(value)
+              .toLowerCase()
+              .normalize("NFD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .replace(/\b(nv|n\.v\.|bv|b\.v\.|bvba|sa|sprl|gmbh|ag|ltd|limited|inc)\b/gi, "")
+              .replace(/[^a-z0-9]/g, "")
+              .trim();
+      }
+
+        /**
+     * Validate:
+     * 1. Recipient VAT against Company.CompanyBTW
+     * 2. Customer name against Company.CompanyOfficialName
+     *
+     * Name validation is performed only after VAT validation succeeds.
      */
     function validateCompanyVAT(invoiceText, company) {
 
+        // --------------------------------------------------
+        // 1. COMPANY VAT MUST EXIST
+        // --------------------------------------------------
         if (!company?.CompanyBTW) {
             return {
                 valid: false,
+                vatValid: false,
+                nameValid: false,
                 status: "MISSING_COMPANY_VAT",
                 message: "Company VAT is missing in database."
             };
         }
 
+        // --------------------------------------------------
+        // 2. EXTRACT RECIPIENT VAT
+        // --------------------------------------------------
         const extractedVAT = extractPartyIdentificationVAT(invoiceText);
 
         if (!extractedVAT) {
             return {
                 valid: false,
+                vatValid: false,
+                nameValid: false,
                 status: "VAT_NOT_FOUND",
                 message: 'No VAT found after "Party Identification:".'
             };
@@ -713,14 +787,22 @@ async function convertAndProcessBase64(base64String) {
         if (!invoiceVAT) {
             return {
                 valid: false,
+                vatValid: false,
+                nameValid: false,
                 status: "EMPTY_VAT",
-                message: 'VAT value after "Party Identification:" could not be parsed.'
+                message:
+                    'VAT value after "Party Identification:" could not be parsed.'
             };
         }
 
+        // --------------------------------------------------
+        // 3. VALIDATE VAT
+        // --------------------------------------------------
         if (invoiceVAT !== companyVAT) {
             return {
                 valid: false,
+                vatValid: false,
+                nameValid: false,
                 status: "VAT_MISMATCH",
                 extractedVAT,
                 expectedVAT: company.CompanyBTW,
@@ -730,11 +812,96 @@ async function convertAndProcessBase64(base64String) {
             };
         }
 
+        // --------------------------------------------------
+        // VAT IS VALIDATED
+        // NOW VALIDATE CompanyOfficialName
+        // --------------------------------------------------
+        if (!company?.CompanyOfficialName?.trim()) {
+            return {
+                valid: false,
+                vatValid: true,
+                nameValid: false,
+                status: "MISSING_COMPANY_OFFICIAL_NAME",
+                extractedVAT,
+                expectedVAT: company.CompanyBTW,
+                message:
+                    "Recipient VAT is correct, but Company.CompanyOfficialName " +
+                    "is missing in Company.json."
+            };
+        }
+
+        // --------------------------------------------------
+        // 4. EXTRACT CUSTOMER NAME
+        // --------------------------------------------------
+        const extractedCompanyName =
+            extractCustomerOfficialName(invoiceText);
+
+        if (!extractedCompanyName) {
+            return {
+                valid: false,
+                vatValid: true,
+                nameValid: false,
+                status: "COMPANY_NAME_NOT_FOUND",
+                extractedVAT,
+                expectedVAT: company.CompanyBTW,
+                expectedCompanyName: company.CompanyOfficialName,
+                message:
+                    'Recipient VAT is correct, but no customer name was found ' +
+                    'between "References Customer" and "VAT ID Number:".'
+            };
+        }
+
+        // --------------------------------------------------
+        // 5. NORMALIZE NAMES
+        // --------------------------------------------------
+        const invoiceCompanyName =
+            normalizeCompanyOfficialName(extractedCompanyName);
+
+        const expectedCompanyName =
+            normalizeCompanyOfficialName(
+                company.CompanyOfficialName
+            );
+
+        // --------------------------------------------------
+        // 6. COMPARE NAMES
+        // --------------------------------------------------
+        if (invoiceCompanyName !== expectedCompanyName) {
+            return {
+                valid: false,
+                vatValid: true,
+                nameValid: false,
+                status: "COMPANY_NAME_MISMATCH",
+
+                extractedVAT,
+                expectedVAT: company.CompanyBTW,
+
+                extractedCompanyName,
+                expectedCompanyName:
+                    company.CompanyOfficialName,
+
+                message:
+                    `Customer name mismatch. Invoice customer name ` +
+                    `(${extractedCompanyName}) does not match ` +
+                    `Company.CompanyOfficialName ` +
+                    `(${company.CompanyOfficialName}).`
+            };
+        }
+
+        // --------------------------------------------------
+        // BOTH VALIDATIONS PASSED
+        // --------------------------------------------------
         return {
             valid: true,
-            status: "VAT_MATCH",
+            vatValid: true,
+            nameValid: true,
+            status: "VAT_AND_NAME_MATCH",
+
             extractedVAT,
-            expectedVAT: company.CompanyBTW
+            expectedVAT: company.CompanyBTW,
+
+            extractedCompanyName,
+            expectedCompanyName:
+                company.CompanyOfficialName
         };
     }
 
@@ -1020,10 +1187,14 @@ async function convertAndProcessBase64(base64String) {
     const approxCharWidth = 8; // px per character
     const tableWidth = Math.min(1200, maxLength * approxCharWidth);
 
-    // Build HTML table
+    // Build HTML table. The wrapper and colgroup allow the Manual table
+    // to use the same Excel-style filters and resize behavior as History.
     let html = `
+      <div class="supplier-history-table-wrap manual-segments-table-wrap"
+           tabindex="0" aria-label="Scrollable Manual posting segments table">
       <table id="segmentsLabelTable" border="1" cellpadding="5" cellspacing="0"
-            style="border-collapse:collapse; margin-top:10px; width:${tableWidth}px; table-layout:auto;">
+            style="border-collapse:collapse; margin-top:10px; width:${tableWidth}px; table-layout:fixed;">
+        <colgroup><col><col></colgroup>
         <thead style="background:#eef;">
           <tr>
             <th style="text-align:left; padding:6px;">Label</th>
@@ -1044,6 +1215,7 @@ async function convertAndProcessBase64(base64String) {
     html += `
         </tbody>
       </table>
+      </div>
     `;
 
     return html;
@@ -2157,9 +2329,12 @@ function detectDocumentType(text) {
     // STRICT VAT VALIDATION
     // --------------------------------------------------
 
+    // --------------------------------------------------
+    // STRICT VAT + COMPANY NAME VALIDATION
+    // --------------------------------------------------
     const vatValidation = validateCompanyVAT(text, company);
 
-    if (vatValidation.valid) {
+    if (vatValidation.vatValid) {
 
         output += `
     ✅ Recipient VAT validated:
@@ -2178,7 +2353,6 @@ function detectDocumentType(text) {
 
         output += `${vatValidation.message}\n`;
 
-        // Optional diagnostic output
         if (vatValidation.extractedVAT) {
             output += `
     📄 Invoice VAT:
@@ -2187,7 +2361,45 @@ function detectDocumentType(text) {
 
         output += `
     🏦 Expected VAT:
-    <strong>${company.CompanyBTW}</strong>\n`;
+    <strong>${company?.CompanyBTW ?? "N/A"}</strong>\n`;
+    }
+
+
+    // --------------------------------------------------
+    // COMPANY OFFICIAL NAME VALIDATION
+    // Run/display only when VAT passed
+    // --------------------------------------------------
+    if (vatValidation.vatValid) {
+
+        if (vatValidation.nameValid) {
+
+            output += `
+    ✅ Recipient name validated:
+    <strong>${vatValidation.extractedCompanyName}</strong>
+    matches Company.CompanyOfficialName
+    (<strong>${company.CompanyOfficialName}</strong>)
+    \n`;
+
+        } else {
+
+            output += `<span class="app-warning">
+    <div>
+    ⚠️ COMPANY NAME VALIDATION FAILED
+    </div>
+    </span>`;
+
+            output += `${vatValidation.message}\n`;
+
+            if (vatValidation.extractedCompanyName) {
+                output += `
+    📄 Invoice customer:
+    <strong>${vatValidation.extractedCompanyName}</strong>\n`;
+            }
+
+            output += `
+    🏦 Expected customer:
+    <strong>${company?.CompanyOfficialName ?? "N/A"}</strong>\n`;
+        }
     }
             
 
@@ -2459,20 +2671,24 @@ if (supplierTypeRaw.endsWith("NPO")) {
       console.warn("Supplier VAT is missing; cannot compare Exception.ExceptionBTW === Supplier.VAT.");
     } else {
       // STRICT (===) comparisons as required
-      const matchedException = Exception.find(e =>
+      // Find ALL Exception rows for this company + supplier VAT.
+      // filter() is required because the same supplier can have multiple comments.
+      const matchedExceptions = Exception.filter(e =>
         e?.ExceptionID === company.CompanyID &&
         e?.ExceptionBTW === supplier.VAT
       );
 
-      // Append ONLY if SegmentException exists (avoid undefined outputs)
-      
-    const segEx = matchedException?.SegmentException;
-    if (typeof segEx === "string" && segEx.trim() !== "") {
-      // NEW: styled line directly after "Currency detected"
-      output += `<div style="background-color:red; color:white; font-weight:bold; padding:4px 6px; display:inline-block;">
-                  ${segEx.trim()}
-                </div>\n`;
-    }
+      // Display every non-empty SegmentException, one comment per line.
+      const segmentExceptions = matchedExceptions
+        .map(e => e?.SegmentException)
+        .filter(segEx => typeof segEx === "string" && segEx.trim() !== "")
+        .map(segEx => segEx.trim());
+
+      segmentExceptions.forEach(segEx => {
+        output += `<div style="background-color:red; color:white; font-weight:bold; padding:4px 6px; display:inline-block; margin-bottom:2px;">
+                    ${segEx}
+                  </div><br>\n`;
+      });
 
     }
   } catch (e) {
@@ -2936,6 +3152,13 @@ travelBlocks.forEach(block => {
         const manualDiv = document.getElementById("manualSugest");
           try {
             manualDiv.innerHTML = seg || `<p><span class="app-warning">⚠️ Manual table returned no content.</span></p>`;
+
+            // Same Excel-style filter/sort and column resizing as History.
+            const manualTable = document.getElementById("segmentsLabelTable");
+            if (manualTable) {
+              initExcelFilters(manualTable);
+              initResizableColumns(manualTable);
+            }
           } catch (err) {
             console.error("Manual table rendering failed:", err);
             manualDiv.innerHTML = `<p>❌ Manual table rendering failed: ${err.message}</p>`;
@@ -3303,16 +3526,40 @@ travelBlocks.forEach(block => {
     }
 
     function applyFilters() {
-      getBodyRows().forEach((row) => {
-        const visible = headerCells.every((_, colIndex) => {
-          const filterSet = activeFilters[colIndex];
-          if (!filterSet) return true;
-          const cellVal = (row.cells[colIndex]?.textContent ?? "").trim();
-          return filterSet.has(cellVal);
-        });
-        row.style.display = visible ? "" : "none";
-      });
-    }
+          getBodyRows().forEach((row) => {
+            // Existing Excel-style column-filter result.
+            const excelFilterVisible = headerCells.every((_, colIndex) => {
+              const filterSet = activeFilters[colIndex];
+
+              if (!filterSet) return true;
+
+              const cellVal =
+                (row.cells[colIndex]?.textContent ?? "").trim();
+
+              return filterSet.has(cellVal);
+            });
+
+            // Cross-match History filter.
+            //
+            // When the filter is active, only History rows marked with
+            // data-cross-match="true" are displayed.
+            //
+            // When it is inactive, all rows allowed by the normal
+            // Excel-style filters are displayed.
+            const crossMatchFilterVisible =
+              table.dataset.crossMatchFilter !== "active" ||
+              row.dataset.crossMatch === "true";
+
+            row.style.display =
+              excelFilterVisible && crossMatchFilterVisible
+                ? ""
+                : "none";
+          });
+        }
+
+        // Allow the cross-match filter controls to reapply the existing
+        // Excel-style filters without duplicating row-visibility logic.
+        table.__applySupplierHistoryFilters = applyFilters;
 
     function updateHeaderIcon(colIndex) {
       const btn = headerCells[colIndex].querySelector(".excel-filter-btn");
@@ -3567,29 +3814,355 @@ travelBlocks.forEach(block => {
     "la", "le", "du", "un", "une", "et", "pour", "avec"
   ]);
 
-  function injectCrossMatchStyles() {
-    if (document.getElementById("cross-match-styles")) return;
-    const style = document.createElement("style");
-    style.id = "cross-match-styles";
-    style.textContent = `
-      .cross-match-highlight {
-        background: #90caf9;
-        font-weight: 700;
-        padding: 0 2px;
-        border-radius: 2px;
+  function setupManualCrossMatchFilter(manualTable, labelCells, matchedWords) {
+    if (!manualTable || !manualTable.tBodies[0]) return;
+
+    const manualRows = Array.from(manualTable.tBodies[0].rows);
+    document.getElementById("crossMatchManualFilter")?.remove();
+
+    manualRows.forEach((row) => {
+      delete row.dataset.crossMatch;
+      row.classList.remove("cross-match-row");
+    });
+
+    if (!matchedWords || matchedWords.size === 0) {
+      manualTable.dataset.crossMatchFilter = "inactive";
+      if (typeof manualTable.__applySupplierHistoryFilters === "function") {
+        manualTable.__applySupplierHistoryFilters();
+      } else {
+        manualRows.forEach((row) => { row.style.display = ""; });
       }
-      #crossMatchSummary {
-        margin-top: 10px;
-        padding: 8px 10px;
-        border: 1px solid #ffe082;
-        background: #fffbe6;
-        border-radius: 6px;
-        font-size: 13px;
+      return;
+    }
+
+    let matchingRowCount = 0;
+    labelCells.forEach((cell) => {
+      const row = cell?.closest("tr");
+      if (!row) return;
+      const labelText = (cell.textContent ?? "").toLowerCase();
+      const rowMatches = Array.from(matchedWords).some((word) =>
+        labelText.includes(word.toLowerCase())
+      );
+      row.dataset.crossMatch = rowMatches ? "true" : "false";
+      row.classList.toggle("cross-match-row", rowMatches);
+      if (rowMatches) matchingRowCount += 1;
+    });
+
+    manualRows.forEach((row) => {
+      if (!row.dataset.crossMatch) row.dataset.crossMatch = "false";
+    });
+    manualTable.dataset.crossMatchFilter = "active";
+
+    const filterBar = document.createElement("div");
+    filterBar.id = "crossMatchManualFilter";
+    filterBar.className = "cross-match-filter-bar";
+    filterBar.setAttribute("role", "region");
+    filterBar.setAttribute("aria-label", "Manual table cross-match filter");
+
+    const statusText = document.createElement("span");
+    statusText.className = "cross-match-filter-status";
+    const countText = document.createElement("span");
+    countText.className = "cross-match-filter-count";
+    countText.textContent = `${matchingRowCount} matching line(s) of ${manualRows.length} Manual line(s)`;
+    const toggleButton = document.createElement("button");
+    toggleButton.type = "button";
+    toggleButton.className = "cross-match-filter-toggle active";
+
+    function updateControl() {
+      const active = manualTable.dataset.crossMatchFilter === "active";
+      toggleButton.classList.toggle("active", active);
+      toggleButton.setAttribute("aria-pressed", String(active));
+      statusText.textContent = active ? "✓ Matching lines only" : "Showing all Manual lines";
+      toggleButton.textContent = active ? "Show all Manual lines" : "Matching lines only";
+    }
+
+    function applyFilters() {
+      if (typeof manualTable.__applySupplierHistoryFilters === "function") {
+        manualTable.__applySupplierHistoryFilters();
+      } else {
+        manualRows.forEach((row) => {
+          const visible = manualTable.dataset.crossMatchFilter !== "active" || row.dataset.crossMatch === "true";
+          row.style.display = visible ? "" : "none";
+        });
       }
-      #crossMatchSummary strong { color: #7a5c00; }
-    `;
-    document.head.appendChild(style);
+    }
+
+    toggleButton.addEventListener("click", () => {
+      manualTable.dataset.crossMatchFilter =
+        manualTable.dataset.crossMatchFilter === "active" ? "inactive" : "active";
+      updateControl();
+      applyFilters();
+    });
+
+    filterBar.append(statusText, countText, toggleButton);
+    const wrapper = manualTable.closest(".manual-segments-table-wrap") || manualTable.closest(".supplier-history-table-wrap");
+    if (wrapper) wrapper.parentNode.insertBefore(filterBar, wrapper);
+    else manualTable.parentNode.insertBefore(filterBar, manualTable);
+
+    updateControl();
+    applyFilters();
   }
+
+  function setupHistoryCrossMatchFilter(
+        historyTable,
+        descriptionCells,
+        matchedWords
+      ) {
+        if (!historyTable || !historyTable.tBodies[0]) return;
+
+        const tbody = historyTable.tBodies[0];
+        const historyRows = Array.from(tbody.rows);
+
+        // Remove a previously rendered filter bar, if present.
+        const oldFilterBar =
+          document.getElementById("crossMatchHistoryFilter");
+
+        if (oldFilterBar) {
+          oldFilterBar.remove();
+        }
+
+        // Reset row state before recalculating the matches.
+        historyRows.forEach((row) => {
+          delete row.dataset.crossMatch;
+          row.classList.remove("cross-match-row");
+        });
+
+        // If no common keywords were found, keep all History rows visible.
+        // The user should still be able to inspect the complete History table.
+        if (!matchedWords || matchedWords.size === 0) {
+          historyTable.dataset.crossMatchFilter = "inactive";
+
+          if (
+            typeof historyTable.__applySupplierHistoryFilters === "function"
+          ) {
+            historyTable.__applySupplierHistoryFilters();
+          } else {
+            historyRows.forEach((row) => {
+              row.style.display = "";
+            });
+          }
+
+          return;
+        }
+
+        let matchingRowCount = 0;
+
+        // Mark each History row according to whether its Description cell
+        // contains at least one of the matched PO Item Description keywords.
+        descriptionCells.forEach((cell) => {
+          if (!cell) return;
+
+          const row = cell.closest("tr");
+
+          if (!row) return;
+
+          const descriptionText =
+            (cell.textContent ?? "").toLowerCase();
+
+          const rowMatches = Array.from(matchedWords).some((word) =>
+            descriptionText.includes(word.toLowerCase())
+          );
+
+          row.dataset.crossMatch = rowMatches ? "true" : "false";
+          row.classList.toggle("cross-match-row", rowMatches);
+
+          if (rowMatches) {
+            matchingRowCount += 1;
+          }
+        });
+
+        // Rows that were not represented in descriptionCells are treated as
+        // non-matching so they are hidden when the filter is active.
+        historyRows.forEach((row) => {
+          if (!row.dataset.crossMatch) {
+            row.dataset.crossMatch = "false";
+            row.classList.remove("cross-match-row");
+          }
+        });
+
+        // Activate matching rows only by default.
+        historyTable.dataset.crossMatchFilter = "active";
+
+        const filterBar = document.createElement("div");
+        filterBar.id = "crossMatchHistoryFilter";
+        filterBar.className = "cross-match-filter-bar";
+        filterBar.setAttribute(
+          "role",
+          "region"
+        );
+        filterBar.setAttribute(
+          "aria-label",
+          "Supplier History cross-match filter"
+        );
+
+        const toggleButton = document.createElement("button");
+        toggleButton.type = "button";
+        toggleButton.className =
+          "cross-match-filter-toggle active";
+        toggleButton.setAttribute("aria-pressed", "true");
+
+        const statusText = document.createElement("span");
+        statusText.className = "cross-match-filter-status";
+
+        const countText = document.createElement("span");
+        countText.className = "cross-match-filter-count";
+        countText.textContent =
+          `${matchingRowCount} matching line(s) of ` +
+          `${historyRows.length} History line(s)`;
+
+        function updateFilterControl() {
+          const isActive =
+            historyTable.dataset.crossMatchFilter === "active";
+
+          toggleButton.classList.toggle("active", isActive);
+          toggleButton.setAttribute(
+            "aria-pressed",
+            String(isActive)
+          );
+
+          if (isActive) {
+            toggleButton.textContent = "Show all History lines";
+            statusText.textContent = "✓ Matching lines only";
+          } else {
+            toggleButton.textContent = "Matching lines only";
+            statusText.textContent = "Showing all History lines";
+          }
+        }
+
+        function applyCombinedHistoryFilters() {
+          if (
+            typeof historyTable.__applySupplierHistoryFilters === "function"
+          ) {
+            historyTable.__applySupplierHistoryFilters();
+            return;
+          }
+
+          // Defensive fallback if the Excel filter was not initialized.
+          historyRows.forEach((row) => {
+            const crossMatchVisible =
+              historyTable.dataset.crossMatchFilter !== "active" ||
+              row.dataset.crossMatch === "true";
+
+            row.style.display =
+              crossMatchVisible ? "" : "none";
+          });
+        }
+
+        toggleButton.addEventListener("click", () => {
+          const currentlyActive =
+            historyTable.dataset.crossMatchFilter === "active";
+
+          historyTable.dataset.crossMatchFilter =
+            currentlyActive ? "inactive" : "active";
+
+          updateFilterControl();
+          applyCombinedHistoryFilters();
+        });
+
+        filterBar.appendChild(statusText);
+        filterBar.appendChild(countText);
+        filterBar.appendChild(toggleButton);
+
+        const historyWrapper =
+          historyTable.closest(".supplier-history-table-wrap");
+
+        if (historyWrapper) {
+          historyWrapper.parentNode.insertBefore(
+            filterBar,
+            historyWrapper
+          );
+        } else {
+          historyTable.parentNode.insertBefore(
+            filterBar,
+            historyTable
+          );
+        }
+
+        updateFilterControl();
+        applyCombinedHistoryFilters();
+      }  
+
+  function injectCrossMatchStyles() {
+        if (document.getElementById("cross-match-styles")) return;
+
+        const style = document.createElement("style");
+        style.id = "cross-match-styles";
+
+        style.textContent = `
+          .cross-match-highlight {
+            background: #90caf9;
+            font-weight: 700;
+            padding: 0 2px;
+            border-radius: 2px;
+          }
+
+          #crossMatchSummary {
+            margin-top: 10px;
+            padding: 8px 10px;
+            border: 1px solid #ffe082;
+            background: #fffbe6;
+            border-radius: 6px;
+            font-size: 13px;
+          }
+
+          #crossMatchSummary strong {
+            color: #7a5c00;
+          }
+
+          .cross-match-filter-bar {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 8px 0 4px;
+            padding: 7px 9px;
+            border: 1px solid #8cb3ff;
+            border-radius: 5px;
+            background: var(--surface-blue-light, #f0f6ff);
+            font-size: 12px;
+            white-space: normal;
+          }
+
+          .cross-match-filter-toggle {
+            min-height: 30px;
+            padding: 5px 10px;
+            border: 1px solid var(--brand-blue, #0a66ff);
+            border-radius: 4px;
+            background: var(--surface, #ffffff);
+            color: var(--brand-blue, #0a66ff);
+            font-weight: 700;
+            cursor: pointer;
+          }
+
+          .cross-match-filter-toggle:hover {
+            background: var(--brand-blue-soft, #e0ecff);
+          }
+
+          .cross-match-filter-toggle.active {
+            background: var(--brand-blue, #0a66ff);
+            color: var(--surface, #ffffff);
+          }
+
+          .cross-match-filter-count {
+            color: var(--text-muted, #6b7280);
+          }
+
+          .cross-match-filter-status {
+            font-weight: 700;
+            color: var(--brand-navy, #003366);
+          }
+
+          #supplierHistoryTable tr.cross-match-row td {
+            background-color: #f4f9ff;
+          }
+
+          #supplierHistoryTable tr.cross-match-row:hover td {
+            background-color: var(--surface-blue-light, #f0f6ff);
+          }
+        `;
+
+        document.head.appendChild(style);
+      }
 
   function tokenizeToWordSet(text) {
     const matches = (text || "").toString().toLowerCase().match(/[a-z0-9]+/gi) || [];
@@ -3696,21 +4269,34 @@ travelBlocks.forEach(block => {
     const labelFullText = label.cells.map((cell) => cell.textContent.toLowerCase()).join(" \u241f ");
     const descriptionFullText = description.cells.map((cell) => cell.textContent.toLowerCase()).join(" \u241f ");
 
-    const matchedWords = new Set(
-      [...itemDescWords].filter((w) => labelFullText.includes(w) && descriptionFullText.includes(w))
+    // Manual rows match PO Item Description words directly.
+    const manualMatchedWords = new Set(
+      [...itemDescWords].filter((word) => labelFullText.includes(word))
     );
 
-    // Highlight the matches everywhere they appear
-    itemDesc.cells.forEach((cell) => highlightWordsInCell(cell, matchedWords));
-    label.cells.forEach((cell) => highlightWordsInCell(cell, matchedWords));
-    description.cells.forEach((cell) => highlightWordsInCell(cell, matchedWords));
+    // History keeps the existing three-table relationship.
+    const historyMatchedWords = new Set(
+      [...manualMatchedWords].filter((word) => descriptionFullText.includes(word))
+    );
+
+    setupManualCrossMatchFilter(labelTable, label.cells, manualMatchedWords);
+    setupHistoryCrossMatchFilter(historyTable, description.cells, historyMatchedWords);
+
+    itemDesc.cells.forEach((cell) => highlightWordsInCell(cell, manualMatchedWords));
+    label.cells.forEach((cell) => highlightWordsInCell(cell, manualMatchedWords));
+    description.cells.forEach((cell) => highlightWordsInCell(cell, historyMatchedWords));
 
     renderCrossMatchSummary(
-      matchedWords.size
-        ? `🔗 <strong>Matching keyword(s)</strong> found in Item Description, Label, and Description: ${Array.from(matchedWords)
+      manualMatchedWords.size
+        ? `🔗 <strong>Manual keyword(s) from PO Item Description:</strong> ${Array.from(manualMatchedWords)
             .map((w) => `<span class="cross-match-highlight">${w}</span>`)
-            .join(", ")}`
-        : `ℹ️ No common keyword found across Item Description, Label, and Description columns.`
+            .join(", ")}` +
+          (historyMatchedWords.size
+            ? `<br>🔗 <strong>History keyword(s):</strong> ${Array.from(historyMatchedWords)
+                .map((w) => `<span class="cross-match-highlight">${w}</span>`)
+                .join(", ")}`
+            : `<br>ℹ️ No Manual-matched keyword was found in the History Description column.`)
+        : `ℹ️ No keyword from PO Item Description was found in the Manual Label column.`
     );
   }
 
